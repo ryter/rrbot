@@ -67,6 +67,50 @@ void show_click(const cv::Mat& canvas, cv::Point point, const std::string& kind,
     cv::imwrite(g_out_dir + "/click_" + std::to_string(index) + ".png", view);
 }
 
+// Перетащить пешку на пешку, ведя курсор за целью.
+//
+// Камера в бою едет: пока палец идёт к цели (перетаскивание занимает около
+// секунды), цель смещается на десятки пикселей — и слияние попадает мимо.
+// Поэтому после зажатия берём свежий кадр, определяем сдвиг поля по пешкам
+// и поправляем точку отпускания.
+//
+// Сдвиг считаем по пешкам (rr::estimate_pawn_shift), а не по положению
+// арены: детектор арены гуляет на десятки пикселей.
+bool drag_merge(rr::Game& game, const std::vector<rr::Pawn>& pawns, cv::Point from, cv::Point to) {
+    if (!game.drag_start_canvas(from)) {
+        // Без мыши (или без окна) — обычный свайп через adb.
+        return game.drag_canvas(from, to);
+    }
+    cv::Point cursor = from;
+    cv::Point target = to;
+    std::vector<rr::Pawn> before = pawns;
+    for (int round = 0; round < 3; ++round) {
+        // Ведём курсор к цели плавно: игра ждёт, пока палец «проведёт» по
+        // карточке, иначе перетаскивание не засчитывается.
+        for (int s = 1; s <= 5; ++s) {
+            const double t = static_cast<double>(s) / 5.0;
+            game.drag_move_canvas(
+                cv::Point(static_cast<int>(std::lround(cursor.x + (target.x - cursor.x) * t)),
+                          static_cast<int>(std::lround(cursor.y + (target.y - cursor.y) * t))));
+            sleep_ms(40);
+        }
+        cursor = target;
+        // Свежий кадр: за это время камера могла увести цель.
+        const cv::Mat fresh = game.grab_canvas();
+        if (fresh.empty()) continue;
+        const rr::ArenaFrame arena = rr::find_arena(fresh);
+        if (!arena.found) continue;
+        const std::vector<rr::Pawn> after = rr::find_pawns(fresh, arena);
+        const cv::Point shift = rr::estimate_pawn_shift(before, after, 60);
+        if (shift.x == 0 && shift.y == 0) continue;
+        before = after;
+        target += shift;
+        std::cout << "    веду за целью: сдвиг поля (" << shift.x << "," << shift.y << ")" << std::endl;
+    }
+    game.drag_end_canvas(target);
+    return true;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -757,21 +801,23 @@ int main(int argc, char** argv) {
     int merge_pause_steps = 0;
     // Пары, которые не слились (обычно это юнит ранга 2 и юнит ранга 1 —
     // игра такие не принимает). Повторять их бессмысленно.
-    std::vector<std::pair<cv::Point, cv::Point>> failed_pairs;
+    //
+    // Помним по клеткам сетки: координаты на кадре устаревают (камера едет),
+    // а клетки — нет.
+    std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> failed_pairs;
     // Клетки, с которых слияние уже не выходило: если с клетки не слилось
     // дважды, юнит на ней скорее всего уже ранга 2, и его больше не трогаем.
-    // Ключ — клетка относительно своей половины арены (пара координат),
-    // значение — сколько раз не вышло и на каком шаге (неудача «стареет»:
-    // юнит мог погибнуть, и клетка снова годится).
+    // Ключ — клетка сетки, значение — сколько раз не вышло и на каком шаге
+    // (неудача «стареет»: юнит мог погибнуть, и клетка снова годится).
     std::map<std::pair<int, int>, std::pair<int, int>> failed_cells;
     // Уже слитые юниты (ранг 2): их не сливают ни с кем — слияние второго
     // ранга с первым игра не принимает, а 2+2 теряет силу.
     //
-    // Положение храним относительно своей половины арены: камера ходит, и
-    // абсолютные координаты быстро устаревают.
+    // Положение храним по сетке клеток: камера ходит, и абсолютные
+    // координаты быстро устаревают.
     struct MergedCell {
-        cv::Point cell;   // относительно своей половины арены
-        int life = 30;    // сколько шагов ещё помнить
+        std::pair<int, int> cell;   // клетка сетки
+        int life = 30;              // сколько шагов ещё помнить
     };
     std::vector<MergedCell> merged_cells;
     // Пара, которую сливали последний раз: её результат проверяем на
@@ -779,16 +825,14 @@ int main(int argc, char** argv) {
     cv::Point merge_source;
     cv::Point merge_target;
     // Положение своей половины арены в момент слияния: камера в бою ходит,
-    // и без этого сравнение позиций пешек бессмысленно.
-    cv::Point merge_arena;
-    // Пара считается неудачной, если её позиции совпадают с одной из
+    // Пешки на момент слияния (без источника и цели): по ним оценивается
+    // сдвиг камеры в следующем кадре (rr::estimate_pawn_shift).
+    std::vector<rr::Pawn> merge_pawns;
+    // Пара считается неудачной, если её клетки совпадают с одной из
     // неудачных (юниты стоят на месте, значит и пара та же).
-    const auto is_failed_pair = [&](cv::Point from, cv::Point to) {
+    const auto is_failed_pair = [&](std::pair<int, int> from, std::pair<int, int> to) {
         for (const auto& failed : failed_pairs) {
-            if (std::abs(failed.first.x - from.x) < 20 && std::abs(failed.first.y - from.y) < 20 &&
-                std::abs(failed.second.x - to.x) < 20 && std::abs(failed.second.y - to.y) < 20) {
-                return true;
-            }
+            if (failed.first == from && failed.second == to) return true;
         }
         return false;
     };
@@ -834,14 +878,23 @@ int main(int argc, char** argv) {
         // какие карты в колоде.
         const rr::ArenaFrame arena = rr::find_arena(canvas);
         const std::vector<rr::Pawn> pawns = rr::find_pawns(canvas, arena);
-        // Юнит уже слит (ранг 2)? Положение — относительно своей половины.
+        // Сетка клеток поля: по ней мы помним «клетку слитого юнита» и
+        // «клетку, с которой слияние не вышло». Индексы клеток не зависят от
+        // положения камеры, в отличие от координат относительно арены
+        // (детектор арены гуляет на десятки пикселей).
+        const rr::CellGrid grid = rr::estimate_grid(pawns);
+        // Клетка пешки (если сетка оценена).
+        const auto cell_of_pawn = [&](const cv::Point& pawn) {
+            if (!grid.valid) return std::pair<int, int>{-1, -1};
+            return grid.cell_of(pawn);
+        };
+        // Юнит уже слит (ранг 2)? Положение — по сетке клеток.
         //
         // Слитый юнит уходит вперёд, поэтому отслеживаем его: ищем пешку
         // рядом с запомненной клеткой и переносим пометку на неё. Если пешки
         // рядом нет — юнит погиб, пометку снимаем.
         for (MergedCell& merged : merged_cells) {
-            const cv::Point absolute(merged.cell.x + arena.bottom.x,
-                                     merged.cell.y + arena.bottom.y);
+            const cv::Point absolute = grid.point_of(merged.cell);
             const rr::Pawn* nearest = nullptr;
             double best = 1e9;
             for (const rr::Pawn& pawn : pawns) {
@@ -855,8 +908,7 @@ int main(int argc, char** argv) {
             }
             if (nearest != nullptr) {
                 // Слитый юнит виден — пометка едет за ним.
-                merged.cell = cv::Point(nearest->center.x - arena.bottom.x,
-                                        nearest->center.y - arena.bottom.y);
+                merged.cell = cell_of_pawn(nearest->center);
                 merged.life = 30;
             } else if (--merged.life <= 0) {
                 // Юнита рядом нет: он погиб или ушёл (а может, просто не
@@ -870,19 +922,16 @@ int main(int argc, char** argv) {
                                            }),
                             merged_cells.end());
         const auto is_merged = [&](const cv::Point& pawn) {
-            const cv::Point rel(pawn.x - arena.bottom.x, pawn.y - arena.bottom.y);
+            const std::pair<int, int> cell = cell_of_pawn(pawn);
             for (const MergedCell& merged : merged_cells) {
-                if (std::abs(merged.cell.x - rel.x) < 45 &&
-                    std::abs(merged.cell.y - rel.y) < 45) {
-                    return true;
-                }
+                if (merged.cell == cell) return true;
             }
             return false;
         };
         // С клетки уже не слилось дважды — юнит там, скорее всего, ранга 2.
         const auto is_bad_cell = [&](const cv::Point& pawn) {
-            const std::pair<int, int> rel(pawn.x - arena.bottom.x, pawn.y - arena.bottom.y);
-            const auto it = failed_cells.find(rel);
+            const std::pair<int, int> cell = cell_of_pawn(pawn);
+            const auto it = failed_cells.find(cell);
             if (it == failed_cells.end()) return false;
             // Давняя неудача ничего не значит: юнит мог погибнуть или уйти.
             if (step - it->second.second > 25) return false;
@@ -934,16 +983,25 @@ int main(int argc, char** argv) {
             // остаётся юнит (уже другого ранга). Считаем и «похожих»
             // пешек: после слияния слитый юнит выглядит иначе, и в этот счёт
             // он не входит.
-            // Сдвиг камеры: арена на кадре сместилась — значит, и пешки.
-            const int shift_x = arena.bottom.x - merge_arena.x;
-            const int shift_y = arena.bottom.y - merge_arena.y;
+            //
+            // Сдвиг камеры: за время перетаскивания поле уезжает (до 70 px),
+            // значит, сместились и пешки. Сдвиг считаем ПО ПЕШКАМ, а не по
+            // положению арены: детектор арены гуляет на десятки пикселей, и
+            // из-за этого слияние, которое на самом деле вышло, считалось
+            // неудачным (а «неудачная» пара попадала в чёрный список).
+            const cv::Point shift = rr::estimate_pawn_shift(merge_pawns, pawns, 60);
+            const int shift_x = shift.x;
+            const int shift_y = shift.y;
+            // Положения пешек с поправкой на ход камеры.
+            const cv::Point merge_source_abs(merge_source.x + shift_x, merge_source.y + shift_y);
+            const cv::Point merge_target_abs(merge_target.x + shift_x, merge_target.y + shift_y);
             // Эталон для подсчёта «похожих» берём с текущего кадра: камера
             // могла сдвинуть поле, и пешка-цель уже не на прежнем месте.
             rr::Pawn reference = merge_reference;
             for (const rr::Pawn& pawn : pawns) {
                 if (!pawn.ours) continue;
-                if (std::abs(pawn.center.x - merge_target.x - shift_x) < 30 &&
-                    std::abs(pawn.center.y - merge_target.y - shift_y) < 30) {
+                if (std::abs(pawn.center.x - merge_target_abs.x) < 30 &&
+                    std::abs(pawn.center.y - merge_target_abs.y) < 30) {
                     reference = pawn;
                     break;
                 }
@@ -953,12 +1011,12 @@ int main(int argc, char** argv) {
             bool target_alive = false;
             for (const rr::Pawn& pawn : pawns) {
                 if (!pawn.ours) continue;
-                if (std::abs(pawn.center.x - merge_source.x - shift_x) < 30 &&
-                    std::abs(pawn.center.y - merge_source.y - shift_y) < 30) {
+                if (std::abs(pawn.center.x - merge_source_abs.x) < 30 &&
+                    std::abs(pawn.center.y - merge_source_abs.y) < 30) {
                     source_gone = false;
                 }
-                if (std::abs(pawn.center.x - merge_target.x - shift_x) < 30 &&
-                    std::abs(pawn.center.y - merge_target.y - shift_y) < 30) {
+                if (std::abs(pawn.center.x - merge_target_abs.x) < 30 &&
+                    std::abs(pawn.center.y - merge_target_abs.y) < 30) {
                     target_alive = true;
                 }
             }
@@ -976,21 +1034,18 @@ int main(int argc, char** argv) {
                 failed_cells.clear();
                 // Слитый юнит (ранг 2) — запоминаем его клетку: его больше
                 // не сливают.
-                merged_cells.push_back({cv::Point(merge_target.x - merge_arena.x + shift_x,
-                                                   merge_target.y - merge_arena.y + shift_y),
-                                        30});
+                merged_cells.push_back({cell_of_pawn(merge_target_abs), 30});
                 if (merged_cells.size() > 12) merged_cells.erase(merged_cells.begin());
             } else {
                 std::cout << "    слияние не вышло: пешек " << our_pawns << ", похожих было "
                           << merge_same_before << ", стало " << same_now << std::endl;
                 ++merge_fail_streak;
-                failed_pairs.emplace_back(merge_source, merge_target);
+                failed_pairs.emplace_back(cell_of_pawn(merge_source_abs),
+                                          cell_of_pawn(merge_target_abs));
                 if (failed_pairs.size() > 8) failed_pairs.erase(failed_pairs.begin());
                 // Клетки-кандидаты: с них слияние уже не выходило.
-                for (const cv::Point& cell : {merge_source, merge_target}) {
-                    const std::pair<int, int> rel(cell.x - merge_arena.x + shift_x,
-                                                 cell.y - merge_arena.y + shift_y);
-                    auto& entry = failed_cells[rel];
+                for (const cv::Point& cell : {merge_source_abs, merge_target_abs}) {
+                    auto& entry = failed_cells[cell_of_pawn(cell)];
                     entry.first += 1;
                     entry.second = step;
                 }
@@ -1094,7 +1149,8 @@ int main(int argc, char** argv) {
                         if (is_merged(pawns[pair.target].center)) return false;
                         if (is_bad_cell(pawns[pair.source].center)) return false;
                         if (is_bad_cell(pawns[pair.target].center)) return false;
-                        return !is_failed_pair(pawns[pair.source].center, pawns[pair.target].center);
+                        return !is_failed_pair(cell_of_pawn(pawns[pair.source].center),
+                                               cell_of_pawn(pawns[pair.target].center));
                     };
                     // Выбор пары: берём ту, у которой выше оценка успеха
                     // (rr::merge_success_estimate — таблица, собранная замерами
@@ -1160,7 +1216,9 @@ int main(int argc, char** argv) {
                         const cv::Point from = pawns[pair.source].center;
                         const cv::Point to = pawns[pair.target].center;
                         show_click(canvas, from, "слияние", g_click_index++);
-                        game.drag_canvas(from, to);
+                        // Перетаскиваем, ведя курсор за целью: камера едет,
+                        // и по старым координатам слияние попадает мимо.
+                        drag_merge(game, pawns, from, to);
                         // Ранг пешек — по форме подставки: ранг 1 = круг,
                         // ранг 2 = капля, ранг 3 = щит. Игра сливает только
                         // юнитов одного ранга.
@@ -1180,9 +1238,16 @@ int main(int argc, char** argv) {
                         merge_pending = true;
                         merge_source = from;
                         merge_target = to;
-                        merge_arena = cv::Point(arena.bottom.x, arena.bottom.y);
                         merge_reference = pawns[pair.target];
                         merge_same_before = rr::count_same_pawns(canvas, pawns, merge_reference);
+                        // Пешки для оценки сдвига камеры: источник и цель
+                        // исключаем — они двигаются сами (источник едет за
+                        // курсором), и в сдвиг камеры попадать не должны.
+                        merge_pawns.clear();
+                        for (int i = 0; i < static_cast<int>(pawns.size()); ++i) {
+                            if (i == pair.source || i == pair.target) continue;
+                            merge_pawns.push_back(pawns[i]);
+                        }
                         merged = true;
                     }
                 }

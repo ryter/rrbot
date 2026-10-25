@@ -7,6 +7,7 @@
 #include <regex>
 #include <sstream>
 #include <string>
+#include <unistd.h>
 #include <vector>
 
 #include "adb.hpp"

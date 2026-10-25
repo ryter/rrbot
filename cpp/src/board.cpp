@@ -80,6 +80,12 @@ std::pair<int, int> CellGrid::cell_of(cv::Point point) const {
     return {column, row};
 }
 
+cv::Point CellGrid::point_of(std::pair<int, int> cell) const {
+    if (!valid || spacing <= 0.0) return {-1, -1};
+    return {static_cast<int>(std::lround(phase_x + cell.first * spacing)),
+            static_cast<int>(std::lround(phase_y + cell.second * spacing))};
+}
+
 CellGrid estimate_grid(const std::vector<Pawn>& pawns) {
     CellGrid grid;
     std::vector<const Pawn*> ours;
