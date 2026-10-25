@@ -484,6 +484,29 @@ int main(int argc, char** argv) {
     // Экраны выбора союзника и модификатора обычная кнопочная логика не
     // берёт: там кнопок много, и первая попавшаяся — не та («Случайный»
     // рядом с иконкой медали, а её обводка даёт ту же синюю заливку).
+    // Счётчик исходов боёв: победа/поражение (определяется по ленте на экране
+    // итогов). Считается, чтобы видеть, насколько бот играет.
+    int wins = 0;
+    int losses = 0;
+    // Когда последний раз сообщили исход боя: чтобы не посчитать одну и ту же
+    // ленту дважды (её видно и в конце боя, и на экране итогов).
+    double last_result_at = -1e9;
+    // Сообщить исход боя (1 — победа, -1 — поражение, 0 — неизвестно).
+    const auto report_result = [&](int result) {
+        if (result == 0) return;
+        const double now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (now - last_result_at < 30.0) return;
+        last_result_at = now;
+        if (result > 0) {
+            ++wins;
+            std::cout << "    исход боя: победа" << std::endl;
+        } else {
+            ++losses;
+            std::cout << "    исход боя: поражение" << std::endl;
+        }
+    };
+
     const auto go_to_battle = [&]() -> bool {
     int pvp_fails = 0;
     int pvp_waits = 0;
@@ -532,6 +555,11 @@ int main(int argc, char** argv) {
         // время боя (окно висит над полем), и обычная проверка «идёт ли бой»
         // на нём срабатывает — бот решил бы, что бой начался, и потерял бы
         // первые волны.
+        //
+        // Лента «ПОБЕДА»/«ПОРАЖЕНИЕ» живёт недолго: к моменту конца боя
+        // её может уже не быть. Поэтому ловим её тут — на любом кадре
+        // навигации, — и запоминаем исход раунда.
+        report_result(hud.battle_result(canvas));
         if (coop_mode) {
             cv::Rect coop_target;
             const rr::Hud::CoopScreen coop_screen = hud.coop_screen(canvas, &coop_target);
@@ -791,10 +819,6 @@ int main(int argc, char** argv) {
     };
 
     // 2) Основной цикл боя: зовём юнита, пока хватает энергии.
-    // Счётчик исходов боёв: победа/поражение (определяется по ленте на экране
-    // итогов). Считается, чтобы видеть, насколько бот играет.
-    int wins = 0;
-    int losses = 0;
     const auto play_battle = [&](int round) {
     double last_summon = -10.0;
     // Слияние: ждём результата прошлой попытки и помним, с кем сливали.
@@ -878,14 +902,20 @@ int main(int argc, char** argv) {
                 const cv::Mat fresh = game.grab_canvas();
                 if (!fresh.empty()) result = hud.battle_result(fresh);
             }
-            if (result > 0) {
-                ++wins;
-                std::cout << "== матч закончился: победа ==" << std::endl;
-            } else if (result < 0) {
-                ++losses;
-                std::cout << "== матч закончился: поражение ==" << std::endl;
-            } else {
+            if (result == 0) {
                 std::cout << "== матч закончился ==" << std::endl;
+            } else {
+                report_result(result);
+            }
+            // Кадр экрана итогов сохраняем: по нему потом собираются эталоны
+            // лент «ПОБЕДА»/«ПОРАЖЕНИЕ» и проверяется определитель исхода.
+            if (!record_dir.empty()) {
+                std::error_code ec;
+                std::filesystem::create_directories(record_dir, ec);
+                const std::string name = result > 0   ? "result_victory.png"
+                                        : result < 0 ? "result_defeat.png"
+                                                     : "result_unknown.png";
+                cv::imwrite((std::filesystem::path(record_dir) / name).string(), canvas);
             }
             break;
         }
