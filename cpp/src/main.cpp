@@ -315,6 +315,10 @@ int main(int argc, char** argv) {
         std::cout << "умение: кнопка (" << ability.x << "," << ability.y << "), готово "
                   << (hud.ability_ready(canvas) ? "да" : "нет") << std::endl;
         std::cout << "в бою: " << (hud.in_battle(canvas) ? "да" : "нет") << std::endl;
+        const int probe_result = hud.battle_result(canvas);
+        std::cout << "исход боя: "
+                  << (probe_result > 0 ? "победа" : probe_result < 0 ? "поражение" : "непонятно")
+                  << std::endl;
         cv::Rect text_rect;
         std::cout << "надпись PvP: "
                   << (hud.find_text(canvas, "pvp", &text_rect)
@@ -787,6 +791,10 @@ int main(int argc, char** argv) {
     };
 
     // 2) Основной цикл боя: зовём юнита, пока хватает энергии.
+    // Счётчик исходов боёв: победа/поражение (определяется по ленте на экране
+    // итогов). Считается, чтобы видеть, насколько бот играет.
+    int wins = 0;
+    int losses = 0;
     const auto play_battle = [&](int round) {
     double last_summon = -10.0;
     // Слияние: ждём результата прошлой попытки и помним, с кем сливали.
@@ -863,7 +871,22 @@ int main(int argc, char** argv) {
                 }
             }
             if (!really_over) continue;
-            std::cout << "== матч закончился ==" << std::endl;
+            // Исход боя: на экране итогов лента «ПОБЕДА»/«ПОРАЖЕНИЕ».
+            // Считаем, чтобы видеть, насколько бот играет.
+            int result = hud.battle_result(canvas);
+            if (result == 0) {
+                const cv::Mat fresh = game.grab_canvas();
+                if (!fresh.empty()) result = hud.battle_result(fresh);
+            }
+            if (result > 0) {
+                ++wins;
+                std::cout << "== матч закончился: победа ==" << std::endl;
+            } else if (result < 0) {
+                ++losses;
+                std::cout << "== матч закончился: поражение ==" << std::endl;
+            } else {
+                std::cout << "== матч закончился ==" << std::endl;
+            }
             break;
         }
         double confidence = 0.0;
@@ -1294,6 +1317,10 @@ int main(int argc, char** argv) {
             // разбирает go_to_battle() в следующем раунде.
             sleep_ms(2000);
         }
+    }
+    if (wins + losses > 0) {
+        std::cout << "итого боёв: " << (wins + losses) << ", побед: " << wins << ", поражений: "
+                  << losses << std::endl;
     }
 
     return 0;

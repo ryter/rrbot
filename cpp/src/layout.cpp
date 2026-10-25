@@ -16,6 +16,8 @@ Layout web_layout() {
         /*ability=*/cv::Rect(),
         /*card_row=*/cv::Rect(0, 712, 492, 78),
         /*card_count=*/4,
+        // Ленты итога боя у веб-клиента нет — исход боя не определяем.
+        /*result_banner=*/cv::Rect(),
         /*canvas_size=*/cv::Size(kCanvasW, kCanvasH),
         /*digits_dir=*/"digits",
         /*close_x_min=*/0.78,
@@ -51,6 +53,9 @@ Layout emulator_layout() {
         /*ability=*/cv::Rect(643, 914, 103, 103),
         /*card_row=*/cv::Rect(190, 915, 460, 100),
         /*card_count=*/5,
+        // Лента «ПОБЕДА»/«ПОРАЖЕНИЕ» — посреди экрана (замерено по живым
+        // кадрам: лента занимает примерно x 240..710, y 480..545).
+        /*result_banner=*/cv::Rect(200, 470, 550, 85),
         /*canvas_size=*/cv::Size(941, 1030),
         /*digits_dir=*/"digits_emulator",
         /*close_x_min=*/0.60,

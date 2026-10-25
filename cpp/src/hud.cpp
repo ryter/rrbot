@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <vector>
 
 namespace rr {
 namespace {
@@ -342,6 +343,10 @@ Hud::Hud(const std::string& assets_dir, Layout layout) : layout_(std::move(layou
             image = cv::imread(entry.path().string(), cv::IMREAD_COLOR);
             if (!image.empty()) text_templates_[stem.substr(5)] = image;
         }
+        if (stem == "result_victory") {
+            image = cv::imread(entry.path().string(), cv::IMREAD_COLOR);
+            if (!image.empty()) victory_ribbon_ = image;
+        }
     }
 }
 
@@ -497,6 +502,54 @@ bool Hud::ability_ready(const cv::Mat& canvas) const {
     // Готовое умение даёт заметное свечение (больше 10 % кольца), при
     // откате его нет вовсе.
     return yellow * 10 > total;
+}
+
+int Hud::battle_result(const cv::Mat& canvas) const {
+    const cv::Rect& band = layout_.result_banner;
+    if (band.width <= 0 || band.height <= 0) return 0;
+    // Победа: лента «ПОБЕДА» — точный шаблон. По одному цвету ленту не
+    // отличить от синего фона главного меню, поэтому сверяем картинку.
+    if (!victory_ribbon_.empty()) {
+        const double scale = layout_.canvas_size.height > 0
+                                 ? static_cast<double>(canvas.rows) / layout_.canvas_size.height
+                                 : 1.0;
+        cv::Mat ribbon = victory_ribbon_;
+        if (std::abs(scale - 1.0) > 0.02) {
+            cv::resize(ribbon, ribbon, cv::Size(), scale, scale, cv::INTER_AREA);
+        }
+        const cv::Rect search(band.x - 10, band.y - 20, band.width + 20, band.height + 40);
+        const cv::Rect clipped = search & cv::Rect(0, 0, canvas.cols, canvas.rows);
+        if (clipped.width > ribbon.cols && clipped.height > ribbon.rows) {
+            const cv::Mat region = canvas(clipped);
+            cv::Mat response;
+            cv::matchTemplate(region, ribbon, response, cv::TM_CCOEFF_NORMED);
+            double best = 0.0;
+            cv::minMaxLoc(response, nullptr, &best, nullptr, nullptr);
+            if (best > 0.55) return 1;
+        }
+    }
+    // Поражение: лента красная. Отличаем от прочих экранов тем, что лента
+    // — широкая полоса одного оттенка, а в ней белый текст.
+    cv::Mat hsv;
+    cv::cvtColor(crop(canvas, band), hsv, cv::COLOR_BGR2HSV);
+    cv::Mat sat;
+    cv::inRange(hsv, cv::Scalar(0, 110, 110), cv::Scalar(179, 255, 255), sat);
+    std::vector<int> hues;
+    int white = 0;
+    for (int y = 0; y < hsv.rows; ++y) {
+        for (int x = 0; x < hsv.cols; ++x) {
+            const cv::Vec3b& pixel = hsv.at<cv::Vec3b>(y, x);
+            if (pixel[1] < 60 && pixel[2] > 200) ++white;
+            if (sat.at<uchar>(y, x) == 0) continue;
+            hues.push_back(pixel[0]);
+        }
+    }
+    if (hues.size() < 1000 || white < 300) return 0;
+    std::sort(hues.begin(), hues.end());
+    const int hue = hues[hues.size() / 2];
+    // Красный (или оранжевый) оттенок — поражение.
+    if (hue <= 22 || hue >= 165) return -1;
+    return 0;
 }
 
 cv::Rect Hud::deck_card_rect(int position) const {

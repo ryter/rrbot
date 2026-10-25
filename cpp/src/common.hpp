@@ -36,6 +36,10 @@ struct Layout {
     cv::Rect card_row;
     // Сколько карточек в колоде (нумеруются с 1).
     int card_count = 5;
+    // Лента с итогом боя посреди экрана («ПОБЕДА» / «ПОРАЖЕНИЕ»).
+    //
+    // Пустой прямоугольник — исход боя не определяется (веб-клиент).
+    cv::Rect result_banner;
     // Канонический размер холста.
     cv::Size canvas_size;
     // Каталог эталонов цифр (шрифт у клиентов разный).
@@ -88,6 +92,7 @@ inline Layout Layout::scaled_to(cv::Size target) const {
     out.summon = scale_rect(summon);
     out.ability = scale_rect(ability);
     out.card_row = scale_rect(card_row);
+    out.result_banner = scale_rect(result_banner);
     out.canvas_size = target;
     return out;
 }
