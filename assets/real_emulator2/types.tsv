@@ -1,0 +1,8 @@
+file	deck_card	card_look	sprite_look	verified	source
+unit_em_00_teal_on_gray.png	2		teal на gray	да	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv
+unit_em_01_orange_on_green.png	3		orange на green	да	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv
+unit_em_02_orange_on_green.png	4		orange на green	нет (по номеру эталона)	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv
+unit_em_03_red_on_green.png	3		red на green	нет (по номеру эталона)	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv
+unit_em_04_orange_on_orange.png	4		orange на orange	да	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv
+unit_em_05_orange_on_orange.png	4		orange на orange	да	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv
+unit_em_06_teal_on_teal.png	1		teal на teal	нет (по номеру эталона)	/home/lennistyle/rushroyale-lab/assets/real_emulator/types.tsv

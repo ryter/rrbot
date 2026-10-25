@@ -1,0 +1,128 @@
+# Конфигурация для работы с живой игрой (веб-клиент Rush Royale).
+#
+# Ключевые отличия от симулятора:
+#   * templates_dir / template_map — эталоны, снятые с настоящего поля;
+#   * mana_max — шкала энергии в игре (0..500);
+#   * порог совпадения выше: спрайты в игре мельче и подвижнее.
+
+capture:
+  source: screen
+  region: [967, 38, 941, 1030]
+  fps: 6.0
+  monitor: 1
+
+vision:
+  templates_dir: assets/real
+  match_threshold: 0.60
+  nms_iou: 0.25
+  max_per_template: 12
+  mana_max: 500.0
+  mana_min_saturation: 80
+
+  # Энергия выводится числом; область берётся из раскладки rrbot.live.
+  mana_bar: {x: 112, y: 670, w: 70, h: 26}
+
+  # Стороны: в бою свои юниты стоят на синих основаниях, чужие — на зелёных.
+  faction:
+    ally_hue_ranges: [[95, 135]]
+    enemy_hue_ranges: [[28, 90]]
+    min_saturation: 70
+    min_value: 40
+
+  # Сопоставление типа юнита с файлом эталона. Эталоны сняты с реального
+  # поля; соответствие между именем в конфиге и спрайтом в игре пока
+  # приблизительное — порядок карточек в колоде совпадает.
+  template_map:
+    knight: unit_00.png
+    archer: unit_01.png
+    golem: unit_02.png
+    samurai: unit_03.png
+    warden: unit_04.png
+
+  units:
+    knight:
+      cost: 100
+      hp: 220
+      damage: 28
+      attack_interval: 0.9
+      speed: 26
+      attack_range: 18
+      radius: 9
+      family: melee
+      counters: [warden]
+    archer:
+      cost: 100
+      hp: 130
+      damage: 34
+      attack_interval: 1.2
+      speed: 22
+      attack_range: 42
+      radius: 8
+      family: ranged
+      counters: [samurai]
+    golem:
+      cost: 100
+      hp: 520
+      damage: 22
+      attack_interval: 1.4
+      speed: 14
+      attack_range: 16
+      radius: 11
+      family: tank
+      counters: [knight]
+    samurai:
+      cost: 100
+      hp: 260
+      damage: 46
+      attack_interval: 1.1
+      speed: 30
+      attack_range: 20
+      radius: 9
+      family: melee
+      counters: [golem]
+    warden:
+      cost: 100
+      hp: 600
+      damage: 30
+      attack_interval: 1.3
+      speed: 12
+      attack_range: 24
+      radius: 12
+      family: tank
+      counters: [bomber]
+
+planner:
+  weight_counter: 3.0
+  weight_pressure: 2.5
+  weight_synergy: 1.2
+  weight_cost_efficiency: 1.0
+  # Метрика эффективности по мане — как в config/default.yaml (замер:
+  # tools/compare_cost_metric.py).
+  cost_metric: hp_dps
+  weight_spawn_value: 0.6
+  reserve_mana: 0
+  max_spawn_per_tick: 1
+  save_mana_enabled: false
+  # Порог выигрыша от ожидания (подобран замером, как в config/default.yaml).
+  save_mana_min_gain: 1.5
+  # Высота поля в канонических координатах (где середина поля).
+  defend_line_height: 640
+  # Максимальное ожидание в секундах (ждать дольше — поздно: враг успевает
+  # пройти). Раньше здесь была величина в единицах маны, поэтому порог
+  # практически не срабатывал.
+  save_mana_max_wait: 8.0
+
+sim:
+  width: 360
+  height: 640
+  mana_max: 500.0
+  mana_regen: 34.0
+  base_hp: 1200.0
+  wave_interval: 14.0
+  wave_size: 3
+  max_duration: 300.0
+  dt: 0.0333333
+  seed: 7
+
+allow_input: false
+log_level: INFO

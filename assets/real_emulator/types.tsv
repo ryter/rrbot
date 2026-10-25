@@ -1,0 +1,9 @@
+file	deck_card	card_look	sprite_look	verified	source
+unit_em_00_teal_on_gray.png	2 (своя колода)	тёмный ниндзя с красными глазами и кунай	тёмный ниндзя с кунай	да	assets/test_nav/battle_02.png, battle_03.png (нижний ряд карточек)
+unit_em_01_orange_on_green.png	3 (своя колода)	бурый зверь с миниганом	бурый зверь с пушкой	да	assets/test_nav/battle_03.png
+unit_em_02_orange_on_orange.png	4 (своя колода)	жёлтый жрец в острокой шапке	жёлтая остроконечная шапка	да	assets/test_nav/battle_03.png
+unit_em_03_teal_on_teal.png	3 (своя колода)	бурый зверь с миниганом	бурый зверь с пушкой	да	assets/test_nav/battle_03.png
+unit_em_04_orange_on_green.png	1 (своя колода)	оранжевый робот с шестерёнками	робот с шестерёнками	да	assets/test_nav/battle_03.png
+unit_em_05_teal_on_teal.png	5 (своя колода)	синий маг с посохом и шаром	синий маг со шаром	да	assets/test_nav/battle_03.png
+unit_em_06_yellow_on_green.png	1 (своя колода)	оранжевый робот с шестерёнками	робот с шестерёнками	да	assets/test_nav/battle_03.png
+unit_em_07_orange_on_orange.png	4 (своя колода)	жёлтый жрец в острокой шапке	жёлтая остроконечная шапка	да	assets/test_nav/battle_03.png

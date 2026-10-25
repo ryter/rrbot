@@ -1,0 +1,168 @@
+# Конфигурация исследовательского бота Rush Royale.
+#
+# Все координаты в пикселях. Для режима симулятора поле имеет размер
+# sim.width x sim.height, а кадр целиком (поле + HUD) — sim.width x
+# (sim.height + 220). Для режима захвата экрана координаты задаются
+# относительно области захвата.
+
+capture:
+  source: sim          # sim | screen
+  region: [0, 0, 360, 860]   # x, y, w, h области захвата (для screen)
+  fps: 10.0
+  monitor: 1
+
+# Калибровка: углы игрового поля в координатах кадра.
+# В режиме sim вычисляется автоматически, здесь — запасной вариант.
+calibration:
+  quad: [[0, 0], [360, 0], [360, 640], [0, 640]]
+  board_width: 360
+  board_height: 640
+
+vision:
+  templates_dir: assets/templates
+  match_threshold: 0.78
+  nms_iou: 0.30
+  max_per_template: 24
+  patch_inset: 0.28
+  mana_max: 500.0
+
+  # Полоска маны в координатах кадра (для sim: поле 360x640 + HUD 220).
+  mana_bar: {x: 90, y: 670, w: 180, h: 24}
+  mana_min_saturation: 80
+
+  # Карточки юнитов в HUD: по ним определяется, кого можно заспавнить.
+  # В режиме симулятора координаты считаются рендерером автоматически.
+  card_min_saturation: 90
+  card_min_saturated_fraction: 0.06
+  spawn_cards: {}
+
+  # Ориентации: OpenCV HSV, диапазон 0..180.
+  faction:
+    ally_hue_ranges: [[95, 135]]
+    enemy_hue_ranges: [[0, 12], [168, 180]]
+    min_saturation: 80
+    min_value: 40
+
+  # Стоимость юнитов влияет на планировщик, а не на зрение.
+  # recharge — время восстановления карточки в секундах: после призова
+  # карточка «горит» это время, звать этот тип юнита снова нельзя.
+  # Значения приближены к настоящей игре (6–12 с) и подобраны так, чтобы
+  # перезарядка, а не мана, ограничивала поток призывов.
+  units:
+    knight:
+      cost: 70
+      hp: 220
+      damage: 28
+      attack_interval: 0.9
+      speed: 26
+      attack_range: 18
+      radius: 9
+      family: melee
+      counters: [warden]
+      recharge: 6.0
+    archer:
+      cost: 90
+      hp: 130
+      damage: 34
+      attack_interval: 1.2
+      speed: 22
+      attack_range: 42
+      radius: 8
+      family: ranged
+      counters: [samurai]
+      recharge: 7.0
+    golem:
+      cost: 120
+      hp: 520
+      damage: 22
+      attack_interval: 1.4
+      speed: 14
+      attack_range: 16
+      radius: 11
+      family: tank
+      counters: [knight]
+      recharge: 9.0
+    bomber:
+      cost: 100
+      hp: 180
+      damage: 95
+      attack_interval: 2.4
+      speed: 20
+      attack_range: 14
+      radius: 9
+      family: splash
+      counters: [archer]
+      recharge: 10.0
+    samurai:
+      cost: 110
+      hp: 260
+      damage: 46
+      attack_interval: 1.1
+      speed: 30
+      attack_range: 20
+      radius: 9
+      family: melee
+      counters: [golem]
+      recharge: 11.0
+    warden:
+      cost: 140
+      hp: 600
+      damage: 30
+      attack_interval: 1.3
+      speed: 12
+      attack_range: 24
+      radius: 12
+      family: tank
+      counters: [bomber]
+      recharge: 12.0
+
+planner:
+  weight_counter: 3.0
+  weight_pressure: 2.5
+  weight_synergy: 1.2
+  weight_cost_efficiency: 1.0
+  # Метрика эффективности по мане:
+  #   hp    — живучесть на единицу цены;
+  #   hp_dps — живучесть × урон на единицу цены (нормировано так же, как hp).
+  # Выбрана замером в симуляторе: на частых волнах (--wave-size 4
+  # --wave-interval 13, 30 партий) hp_dps даёт 36.2% побед против 31.0%
+  # у hp и нигде не хуже. Инструмент — tools/compare_cost_metric.py.
+  cost_metric: hp_dps
+  weight_spawn_value: 0.6
+  reserve_mana: 0
+  max_spawn_per_tick: 1
+  # Накопление маны под более сильного юнита по умолчанию выключено:
+  # в симуляторе оно не помогает. На штатных волнах доля побед у обоих
+  # режимов 100%, а на более частых волнах (tools/experiment.py
+  # --wave-size 4 --wave-interval 13, 8 партий) копим ману проигрывает:
+  # 37% побед против 62% без него.
+  save_mana_enabled: false
+  # Порог выигрыша от ожидания. Подобран замером в симуляторе (после
+  # починки выбора линии): 1.5 даёт 77.8% побед против 76.7% у 1.0,
+  # 74.4% у 2.5 и 64.4% у 0.5 (слишком часто ждём зря).
+  save_mana_min_gain: 1.5
+  # Высота поля в канонических координатах: где середина поля. Враг перешёл
+  # середину — защищаем его линию; иначе толкаем в другую (контр-пуш).
+  # Замерено в симуляторе: 97% побед против 35% у выбора линии по давлению.
+  defend_line_height: 640
+  # Максимальное ожидание в секундах (ждать дольше — поздно: враг успевает
+  # пройти). Раньше здесь была величина в единицах маны, поэтому порог
+  # практически не срабатывал.
+  save_mana_max_wait: 8.0
+
+sim:
+  width: 360
+  height: 640
+  mana_max: 500.0
+  mana_regen: 34.0
+  base_hp: 1200.0
+  wave_interval: 14.0
+  wave_size: 3
+  max_duration: 300.0
+  dt: 0.0333333
+  seed: 7
+
+# Реальные клики по окну игры выключены по умолчанию: бот работает
+# в режиме рекомендаций. Включать только на своём устройстве.
+allow_input: false
+log_level: INFO

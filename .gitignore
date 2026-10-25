@@ -1,0 +1,14 @@
+# Виртуальное окружение и кэш питонов
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Сборка C++ (исходники в cpp/src и cpp/eval — под контролем)
+cpp/build/
+*.o
+*.d
+
+# Логи и временные файлы
+*.log
+.DS_Store
