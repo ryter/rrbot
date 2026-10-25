@@ -44,13 +44,13 @@ def _tool_built():
 
 
 def test_table_values():
-    # Значения из замеров: пара одного ранга с похожими портретами сливается
-    # в 92 % случаев; пара разных рангов игра не принимает (живой опыт
-    # 24.10), поэтому её оценка близка к нулю.
-    assert estimate(0.95, True) == pytest.approx(0.92, abs=0.001)
-    assert estimate(0.85, True) == pytest.approx(0.77, abs=0.001)
-    assert estimate(0.79, True) == pytest.approx(0.50, abs=0.001)
-    assert estimate(0.70, True) == pytest.approx(0.33, abs=0.001)
+    # Значения из замеров 25.10 (46 попыток, PvP): пара одного ранга с
+    # похожими портретами сливается в 96 % случаев; пара разных рангов
+    # игра не принимает (живой опыт 24.10), поэтому её оценка близка к нулю.
+    assert estimate(0.95, True) == pytest.approx(0.96, abs=0.001)
+    assert estimate(0.87, True) == pytest.approx(0.92, abs=0.001)
+    assert estimate(0.80, True) == pytest.approx(0.58, abs=0.001)
+    assert estimate(0.70, True) == pytest.approx(0.12, abs=0.001)
     assert estimate(0.95, False) == pytest.approx(0.05, abs=0.001)
     assert estimate(0.70, False) == pytest.approx(0.05, abs=0.001)
 

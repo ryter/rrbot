@@ -275,17 +275,25 @@ double merge_success_estimate(const MergePair& pair) {
     // 24.10). Такие пары бот не пробует вовсе, оценка близка к нулю.
     if (!pair.same_rank) return 0.05;
     double probability;
+    // Таблица — по замерам 25.10 (46 попыток, PvP): >= 0.90 — 96 %,
+    // 0.85..0.90 — 92 %, 0.78..0.85 — 58 %, ниже 0.78 — 12 %.
     if (pair.score >= 0.90) {
+        probability = 0.96;
+    } else if (pair.score >= 0.85) {
         probability = 0.92;
-    } else if (pair.score >= 0.82) {
-        probability = 0.77;
     } else if (pair.score >= 0.78) {
-        probability = 0.50;
+        probability = 0.58;
     } else {
-        probability = 0.33;
+        probability = 0.12;
     }
-    // Пешки заметно разного размера — шанс меньше.
-    if (pair.size_diff > kMergeSizeMax) probability *= 0.8;
+    // Пешки заметно разного размера — скорее всего, разные ранги (юнит
+    // второго ранга нарисован крупнее). Замер 25.10: разница размеров до
+    // 8 % — успех в 95 % случаев, 8..12 % — в 66 %, больше — в 50 %.
+    if (pair.size_diff > kMergeSizeMax) {
+        probability *= 0.55;
+    } else if (pair.size_diff > kMergeSizeGood) {
+        probability *= 0.75;
+    }
     return probability;
 }
 

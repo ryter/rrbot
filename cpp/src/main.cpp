@@ -1134,9 +1134,10 @@ int main(int argc, char** argv) {
                     // (tools/merge_failure_analysis.py): у неудачных пар
                     // пешки чаще разного размера (разный ранг) и портреты
                     // похожи слабее.
-                    const auto good = [&](const rr::MergePair& pair, double min_score,
-                                          double max_size_diff) {
-                        if (pair.score < min_score) return false;
+                    const auto good = [&](const rr::MergePair& pair, double max_size_diff) {
+                        // Совсем непохожие портреты — не сливаем никогда: пара
+                        // ниже порога сливается в 12 % случаев.
+                        if (pair.score < rr::kMergeTryFloor) return false;
                         if (pair.size_diff > max_size_diff) return false;
                         // Разные ранги игра не сливает («ранг 1 + ранг 2» —
                         // отказ), такие пары не трогаем вовсе.
@@ -1155,61 +1156,64 @@ int main(int argc, char** argv) {
                     // Выбор пары: берём ту, у которой выше оценка успеха
                     // (rr::merge_success_estimate — таблица, собранная замерами
                     // живых боёв). Оценка учитывает и похожесть портретов, и
-                    // ранг (по форме основания).
+                    // ранг (по форме основания), и разницу размеров.
                     //
-                    // Про ранг: ранг на поле виден — это форма подставки
-                    // (круг — ранг 1, капля — ранг 2, щит — ранг 3;
-                    // notes/ЗАДАЧА1_РАНГ.md, исправление 24.10). Игра сливает
-                    // только юнитов одного ранга, поэтому пары разных рангов
-                    // бот не трогает, а слитые юниты (ранг 2 и выше) не
-                    // сливает вовсе: с первым рангом игра не примет, а «2 + 2»
-                    // теряет силу.
-                    //
-                    // Пороги (похожесть и размер) — ослабляются постепенно,
-                    // чтобы бот не встал на забитой доске.
-                    const auto pick = [&](double min_score, double max_size_diff,
+                    // Пороги заданы по оценке, а не по «сырой» похожести:
+                    // пара с похожестью 0.99, но с разницей размеров 13 %
+                    // (это юнит второго ранга) сливается в 50 % случаев, а
+                    // пара с похожестью 0.85 и одинаковым размером — почти
+                    // всегда.
+                    const auto pick = [&](double min_estimate, double max_size_diff,
                                           bool adjacent_only) {
                         const rr::MergePair* best = nullptr;
                         double best_estimate = -1.0;
                         for (const rr::MergePair& pair : pairs) {
-                            if (!good(pair, min_score, max_size_diff)) continue;
+                            if (!good(pair, max_size_diff)) continue;
                             if (adjacent_only && !pair.adjacent) continue;
                             const double estimate = rr::merge_success_estimate(pair);
+                            if (estimate < min_estimate) continue;
                             if (estimate <= best_estimate) continue;
                             best_estimate = estimate;
                             best = &pair;
                         }
                         return best;
                     };
-                    auto best = pick(rr::kMergeTryStrict, rr::kMergeSizeMax, true);
-                    // Если строгих пар нет — ослабляем условия: сначала
-                    // похожесть, потом размер пешек.
-                    if (best == nullptr) {
-                        best = pick(rr::kMergeTryMin, rr::kMergeSizeMax, true);
-                    }
-                    if (best == nullptr) {
-                        best = pick(rr::kMergeTryMin - 0.06, rr::kMergeSizeMax, true);
-                    }
                     // Доска почти забита: без слияния новый юнит не встанет
                     // (виджет призыва гаснет), поэтому берём любую пару,
                     // которую вообще можно слить.
                     const bool board_tight = board.valid ? board.free_cells <= 2
                                                           : our_pawns >= 10;
+                    // Надёжная пара: сливается почти всегда (замер 25.10:
+                    // 34 из 34). Остальные пороги — по оценке успеха.
+                    auto best = pick(0.90, rr::kMergeSizeMax, true);
+                    // Терпимая пара: похожесть 0.85 при одинаковом размере
+                    // либо очень похожие портреты при небольшой разнице
+                    // размеров.
+                    if (best == nullptr) {
+                        best = pick(0.65, rr::kMergeSizeMax, true);
+                    }
+                    // Ниже 0.65 слияние удаётся в 12-58 % случаев, и такая
+                    // попытка только засоряет чёрные списки. Поэтому рыхлые
+                    // пороги — только когда доска забита: там сливать надо
+                    // любой ценой, иначе новый юнит не встанет.
                     if (best == nullptr && board_tight) {
-                        best = pick(rr::kMergeTryFloor, rr::kMergeSizeRelaxed, true);
+                        best = pick(0.50, rr::kMergeSizeRelaxed, true);
+                    }
+                    if (best == nullptr && board_tight) {
+                        best = pick(0.30, rr::kMergeSizeRelaxed, true);
                     }
                     if (best == nullptr && board_tight) {
                         // Совсем ничего нет — ослабляем сходство портретов
                         // (тип карты может отличаться), но ранг оставляем:
                         // разные ранги игра не сливает.
-                        best = pick(rr::kMergeTryFloor, rr::kMergeSizeRelaxed, false);
+                        best = pick(0.10, rr::kMergeSizeRelaxed, false);
                     }
                     // Если соседних пар нет (или все не вышли) — пробуем через
                     // всю доску, но только с очень похожими портретами.
                     if (best == nullptr && merge_fail_streak >= 2) {
                         // Соседних пар не нашлось — пробуем через всю доску, но
                         // только с очень похожими портретами.
-                        best = pick(0.9, rr::kMergeSizeRelaxed, false);
+                        best = pick(0.90, rr::kMergeSizeRelaxed, false);
                     }
                     if (best != nullptr) {
                         const rr::MergePair& pair = *best;
