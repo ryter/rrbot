@@ -3,6 +3,8 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <regex>
 #include <sstream>
@@ -234,6 +236,15 @@ private:
 }  // namespace
 
 // Окно по классу: "google-chrome" или "Waydroid".
+// Сравнение без учёта регистра: hyprctl пишет класс окна эмулятора как
+// «Waydroid», а не «waydroid» — с учётом регистра окно не находилось, и все
+// клики уходили через adb вместо мыши.
+static std::string lowercase(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
 static GameWindow find_window_by_class(const std::string& class_name,
                                       const std::string& title_hint) {
     GameWindow result;
@@ -260,8 +271,9 @@ static GameWindow find_window_by_class(const std::string& class_name,
     if (!current.empty()) blocks.push_back(current);
 
     for (const std::string& block : blocks) {
-        if (block.find("class: " + class_name) == std::string::npos) continue;
-        const bool game = block.find(title_hint) != std::string::npos;
+        const std::string lower_block = lowercase(block);
+        if (lower_block.find("class: " + lowercase(class_name)) == std::string::npos) continue;
+        const bool game = lower_block.find(lowercase(title_hint)) != std::string::npos;
         std::smatch match;
         std::regex at_re(R"(at:\s*(-?\d+),(-?\d+))");
         std::regex size_re(R"(size:\s*(\d+),(\d+))");

@@ -13,6 +13,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -83,7 +84,20 @@ bool drag_merge(rr::Game& game, const std::vector<rr::Pawn>& pawns, cv::Point fr
     }
     cv::Point cursor = from;
     cv::Point target = to;
-    std::vector<rr::Pawn> before = pawns;
+    // Источник и цель сами едут (источник — за пальцем), в сдвиг камеры
+    // они не входят: иначе медиана «сдвига поля» повторяет жест и точка
+    // отпускания уезжает вместе с пальцем, минуя цель.
+    const auto without_pair = [&](const std::vector<rr::Pawn>& all, cv::Point dragged,
+                                  cv::Point aimed) {
+        std::vector<rr::Pawn> kept;
+        for (const rr::Pawn& pawn : all) {
+            if (std::hypot(pawn.center.x - dragged.x, pawn.center.y - dragged.y) < 40) continue;
+            if (std::hypot(pawn.center.x - aimed.x, pawn.center.y - aimed.y) < 25) continue;
+            kept.push_back(pawn);
+        }
+        return kept;
+    };
+    std::vector<rr::Pawn> before = without_pair(pawns, from, to);
     for (int round = 0; round < 3; ++round) {
         // Ведём курсор к цели плавно: игра ждёт, пока палец «проведёт» по
         // карточке, иначе перетаскивание не засчитывается.
@@ -100,12 +114,35 @@ bool drag_merge(rr::Game& game, const std::vector<rr::Pawn>& pawns, cv::Point fr
         if (fresh.empty()) continue;
         const rr::ArenaFrame arena = rr::find_arena(fresh);
         if (!arena.found) continue;
-        const std::vector<rr::Pawn> after = rr::find_pawns(fresh, arena);
+        const std::vector<rr::Pawn> after_all = rr::find_pawns(fresh, arena);
+        const std::vector<rr::Pawn> after = without_pair(after_all, cursor, target);
         const cv::Point shift = rr::estimate_pawn_shift(before, after, 60);
-        if (shift.x == 0 && shift.y == 0) continue;
+        cv::Point predicted = target + shift;
+        // Точка цели — сама пешка на свежем кадре, а не старые координаты
+        // плюс сдвиг: так отпускаем точно в основание, даже если камера
+        // уехала неравномерно.
+        int nearest = -1;
+        double nearest_dist = 45.0;
+        for (int i = 0; i < static_cast<int>(after_all.size()); ++i) {
+            const rr::Pawn& pawn = after_all[i];
+            if (!pawn.ours) continue;
+            if (std::hypot(pawn.center.x - cursor.x, pawn.center.y - cursor.y) < 40) continue;
+            const double dist = std::hypot(pawn.center.x - predicted.x, pawn.center.y - predicted.y);
+            if (dist < nearest_dist) {
+                nearest_dist = dist;
+                nearest = i;
+            }
+        }
+        if (nearest >= 0) {
+            target = after_all[nearest].center;
+        } else if (shift.x != 0 || shift.y != 0) {
+            target = predicted;
+        } else {
+            continue;
+        }
         before = after;
-        target += shift;
-        std::cout << "    веду за целью: сдвиг поля (" << shift.x << "," << shift.y << ")" << std::endl;
+        std::cout << "    веду за целью: сдвиг поля (" << shift.x << "," << shift.y << ")"
+                  << std::endl;
     }
     game.drag_end_canvas(target);
     return true;
@@ -141,6 +178,12 @@ int main(int argc, char** argv) {
     // слияния вживую (бот только зовёт юнитов — а слияние делаем руками).
     bool no_merge = false;
     bool no_summon = false;
+    // Сколько свободных клеток держать на доске: пока мест меньше, бот
+    // новых юнитов не зовёт (0 — зовёт всегда, как раньше).
+    int keep_room_cells = 0;
+    // Высадка карточкой из колоды на клетку, а не кликом по виджету призыва.
+    // Нужно, чтобы планировщик выбирал линию (и в будущем — юнита).
+    bool from_deck = false;
     // Умение героя (круглая кнопка справа внизу) можно отключить: так
     // проверяется жест нажатия вживую.
     bool no_ability = false;
@@ -148,6 +191,8 @@ int main(int argc, char** argv) {
     // с ключом --pvp — PvP.
     bool coop_mode = true;
     bool help = false;
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
     // Каталог эталонов цифр: по умолчанию — из раскладки бэкенда.
     std::string digits_dir;
     // Картинка с самим числом (вырез области энергии): читаем цифры
@@ -170,6 +215,8 @@ int main(int argc, char** argv) {
         else if (arg == "--vision") analyze_field = true;
         else if (arg == "--no-merge") no_merge = true;
         else if (arg == "--no-summon") no_summon = true;
+        else if (arg == "--keep-room" && i + 1 < argc) keep_room_cells = std::atoi(argv[++i]);
+        else if (arg == "--from-deck") from_deck = true;
         else if (arg == "--no-ability") no_ability = true;
         else if (arg == "--pvp") coop_mode = false;
         else if (arg == "--help" || arg == "-h") help = true;
@@ -194,6 +241,8 @@ int main(int argc, char** argv) {
             "  --learn-dir КАТАЛог               куда складывать эталоны\n"
             "  --learn-max N                     максимум образцов на цифру\n"
             "  --record КАТАЛог                  записывать кадры боя\n"
+            "  --keep-room N                    держать N свободных клеток (0 — не держать)\n"
+            "  --from-deck                       высаживать карточкой из колоды на клетку\n"
             "  --vision                          разбор поля и подсказка планировщика\n"
             "  --dry-run                         считать, не кликая (веб-клиент)\n"
             "  --debug                           сохранять кадры боя в --out\n"
@@ -529,9 +578,17 @@ int main(int argc, char** argv) {
     // Сколько раз за проход бот отходил назад. Больше трёх — опасно: игра
     // закрывается, и бот остаётся на пустом экране лаунчера.
     int back_presses = 0;
+    // Подряд кадры без кнопок меню: лаунчер Android, игра закрыта.
+    int empty_screens = 0;
     // Вернуть игру на экран (эмулятор): если бот всё-таки её закрыл.
+    //
+    // Запускаем через adb: команда `waydroid app launch` опирается на
+    // менеджер сессии и периодически падает с «Sending reply failed» — тогда
+    // бот остаётся на лаунчере и до боя не доходит.
     const auto relaunch_game = [&]() {
-        std::system("waydroid app launch com.my.defense > /dev/null 2>&1");
+        std::system("adb shell am start -n "
+                    "com.my.defense/games.my.heart.commonpreloaderlib.PreloadActivity "
+                    "> /dev/null 2>&1");
         sleep_ms(8000);
     };
     for (int step = 0; step < 60 && !in_battle; ++step) {
@@ -677,6 +734,20 @@ int main(int argc, char** argv) {
         }
         bool clicked = false;
         bool any_effect = false;
+        if (candidates.empty() && !coop_flow) {
+            ++empty_screens;
+            std::cout << "[меню " << step << "] пустой экран" << std::endl;
+            if (empty_screens >= 2) {
+                std::cout << "    игра не на экране, запускаю" << std::endl;
+                relaunch_game();
+                empty_screens = 0;
+                back_presses = 0;
+                stuck = 0;
+            }
+            sleep_ms(1000);
+            continue;
+        }
+        empty_screens = 0;
         for (const rr::UiElement& button : candidates) {
             // Фиктивный клик в центр экрана: в меню он бесполезен, а на
             // экране итогов попадает по панели награды. Лучше подождать.
@@ -837,21 +908,6 @@ int main(int argc, char** argv) {
     // Помним по клеткам сетки: координаты на кадре устаревают (камера едет),
     // а клетки — нет.
     std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> failed_pairs;
-    // Клетки, с которых слияние уже не выходило: если с клетки не слилось
-    // дважды, юнит на ней скорее всего уже ранга 2, и его больше не трогаем.
-    // Ключ — клетка сетки, значение — сколько раз не вышло и на каком шаге
-    // (неудача «стареет»: юнит мог погибнуть, и клетка снова годится).
-    std::map<std::pair<int, int>, std::pair<int, int>> failed_cells;
-    // Уже слитые юниты (ранг 2): их не сливают ни с кем — слияние второго
-    // ранга с первым игра не принимает, а 2+2 теряет силу.
-    //
-    // Положение храним по сетке клеток: камера ходит, и абсолютные
-    // координаты быстро устаревают.
-    struct MergedCell {
-        std::pair<int, int> cell;   // клетка сетки
-        int life = 30;              // сколько шагов ещё помнить
-    };
-    std::vector<MergedCell> merged_cells;
     // Пара, которую сливали последний раз: её результат проверяем на
     // следующем шаге.
     cv::Point merge_source;
@@ -860,11 +916,19 @@ int main(int argc, char** argv) {
     // Пешки на момент слияния (без источника и цели): по ним оценивается
     // сдвиг камеры в следующем кадре (rr::estimate_pawn_shift).
     std::vector<rr::Pawn> merge_pawns;
+    // Последняя рекомендация планировщика: линия высадки для --from-deck.
+    rr::Action plan_action;
+    bool have_plan = false;
     // Пара считается неудачной, если её клетки совпадают с одной из
     // неудачных (юниты стоят на месте, значит и пара та же).
     const auto is_failed_pair = [&](std::pair<int, int> from, std::pair<int, int> to) {
+        // Пара ненаправлена: A→B не вышло — B→A игра тоже не примет
+        // (тот же ранг/тип), а жест в обратную сторону только теряет шаг.
         for (const auto& failed : failed_pairs) {
-            if (failed.first == from && failed.second == to) return true;
+            if ((failed.first == from && failed.second == to) ||
+                (failed.first == to && failed.second == from)) {
+                return true;
+            }
         }
         return false;
     };
@@ -931,8 +995,8 @@ int main(int argc, char** argv) {
         // какие карты в колоде.
         const rr::ArenaFrame arena = rr::find_arena(canvas);
         const std::vector<rr::Pawn> pawns = rr::find_pawns(canvas, arena);
-        // Сетка клеток поля: по ней мы помним «клетку слитого юнита» и
-        // «клетку, с которой слияние не вышло». Индексы клеток не зависят от
+        // Сетка клеток поля: по ней помним пары, которые игра отклонила.
+        // Индексы клеток не зависят от
         // положения камеры, в отличие от координат относительно арены
         // (детектор арены гуляет на десятки пикселей).
         const rr::CellGrid grid = rr::estimate_grid(pawns);
@@ -940,55 +1004,6 @@ int main(int argc, char** argv) {
         const auto cell_of_pawn = [&](const cv::Point& pawn) {
             if (!grid.valid) return std::pair<int, int>{-1, -1};
             return grid.cell_of(pawn);
-        };
-        // Юнит уже слит (ранг 2)? Положение — по сетке клеток.
-        //
-        // Слитый юнит уходит вперёд, поэтому отслеживаем его: ищем пешку
-        // рядом с запомненной клеткой и переносим пометку на неё. Если пешки
-        // рядом нет — юнит погиб, пометку снимаем.
-        for (MergedCell& merged : merged_cells) {
-            const cv::Point absolute = grid.point_of(merged.cell);
-            const rr::Pawn* nearest = nullptr;
-            double best = 1e9;
-            for (const rr::Pawn& pawn : pawns) {
-                if (!pawn.ours) continue;
-                const double distance = std::hypot(pawn.center.x - absolute.x,
-                                                  pawn.center.y - absolute.y);
-                if (distance < 50 && distance < best) {
-                    best = distance;
-                    nearest = &pawn;
-                }
-            }
-            if (nearest != nullptr) {
-                // Слитый юнит виден — пометка едет за ним.
-                merged.cell = cell_of_pawn(nearest->center);
-                merged.life = 30;
-            } else if (--merged.life <= 0) {
-                // Юнита рядом нет: он погиб или ушёл (а может, просто не
-                // виден детектору — у слитых юнитов форма не круглая).
-                merged.life = 0;
-            }
-        }
-        merged_cells.erase(std::remove_if(merged_cells.begin(), merged_cells.end(),
-                                           [](const MergedCell& merged) {
-                                               return merged.life <= 0;
-                                           }),
-                            merged_cells.end());
-        const auto is_merged = [&](const cv::Point& pawn) {
-            const std::pair<int, int> cell = cell_of_pawn(pawn);
-            for (const MergedCell& merged : merged_cells) {
-                if (merged.cell == cell) return true;
-            }
-            return false;
-        };
-        // С клетки уже не слилось дважды — юнит там, скорее всего, ранга 2.
-        const auto is_bad_cell = [&](const cv::Point& pawn) {
-            const std::pair<int, int> cell = cell_of_pawn(pawn);
-            const auto it = failed_cells.find(cell);
-            if (it == failed_cells.end()) return false;
-            // Давняя неудача ничего не значит: юнит мог погибнуть или уйти.
-            if (step - it->second.second > 25) return false;
-            return it->second.first >= 2;
         };
         int our_pawns = 0;
         for (const rr::Pawn& pawn : pawns) {
@@ -1084,11 +1099,6 @@ int main(int argc, char** argv) {
                           << std::endl;
                 merge_fail_streak = 0;
                 failed_pairs.clear();
-                failed_cells.clear();
-                // Слитый юнит (ранг 2) — запоминаем его клетку: его больше
-                // не сливают.
-                merged_cells.push_back({cell_of_pawn(merge_target_abs), 30});
-                if (merged_cells.size() > 12) merged_cells.erase(merged_cells.begin());
             } else {
                 std::cout << "    слияние не вышло: пешек " << our_pawns << ", похожих было "
                           << merge_same_before << ", стало " << same_now << std::endl;
@@ -1096,13 +1106,6 @@ int main(int argc, char** argv) {
                 failed_pairs.emplace_back(cell_of_pawn(merge_source_abs),
                                           cell_of_pawn(merge_target_abs));
                 if (failed_pairs.size() > 8) failed_pairs.erase(failed_pairs.begin());
-                // Клетки-кандидаты: с них слияние уже не выходило.
-                for (const cv::Point& cell : {merge_source_abs, merge_target_abs}) {
-                    auto& entry = failed_cells[cell_of_pawn(cell)];
-                    entry.first += 1;
-                    entry.second = step;
-                }
-                if (failed_cells.size() > 24) failed_cells.erase(failed_cells.begin());
                 if (merge_fail_streak >= 3) {
                     merge_pause_steps = 10;
                     merge_fail_streak = 0;
@@ -1148,6 +1151,8 @@ int main(int argc, char** argv) {
             // середина поля.
             planner->set_field_height(field_height);
             const rr::Action action = planner->plan(with_lanes);
+            plan_action = action;
+            have_plan = true;
             if (analyze_field) {
                 std::cout << "    юнитов: своих " << with_lanes.ally_units.size() << ", чужих "
                           << with_lanes.enemy_units.size() << "; рекомендую: " << action.reason
@@ -1187,22 +1192,35 @@ int main(int argc, char** argv) {
                     // (tools/merge_failure_analysis.py): у неудачных пар
                     // пешки чаще разного размера (разный ранг) и портреты
                     // похожи слабее.
+                    // Соседство — по сетке клеток, не по радиусу основания:
+                    // у крупного юнита 3.3 радиуса накрывает две клетки, и
+                    // бот тянет через клетку (в замере 26.10 такие жесты на
+                    // 156 px давали 4 из 5 провалов).
+                    const auto pair_adjacent = [&](const rr::MergePair& pair) {
+                        if (grid.valid) {
+                            const auto a = cell_of_pawn(pawns[pair.source].center);
+                            const auto b = cell_of_pawn(pawns[pair.target].center);
+                            if (a.first < 0 || b.first < 0) return pair.adjacent;
+                            const int dc = std::abs(a.first - b.first);
+                            const int dr = std::abs(a.second - b.second);
+                            return dc <= 1 && dr <= 1 && (dc + dr) > 0;
+                        }
+                        return pair.adjacent;
+                    };
                     const auto good = [&](const rr::MergePair& pair, double max_size_diff) {
-                        // Совсем непохожие портреты — не сливаем никогда: пара
-                        // ниже порога сливается в 12 % случаев.
-                        if (pair.score < rr::kMergeTryFloor) return false;
+                        // Слабые портреты в живом бою 26.10 не слились
+                        // (0.77 и 0.78 — оба промах). Ниже kMergeTryMin
+                        // жест только засоряет чёрный список.
+                        if (pair.score < rr::kMergeTryMin) return false;
                         if (pair.size_diff > max_size_diff) return false;
                         // Разные ранги игра не сливает («ранг 1 + ранг 2» —
                         // отказ), такие пары не трогаем вовсе.
                         if (!pair.same_rank) return false;
-                        // Слитый юнит (ранг 2 и выше) не сливаем: слияние
-                        // второго ранга с первым не принимается, а «2 + 2»
-                        // теряет силу.
-                        if (pair.rank_source > 1) return false;
-                        if (is_merged(pawns[pair.source].center)) return false;
-                        if (is_merged(pawns[pair.target].center)) return false;
-                        if (is_bad_cell(pawns[pair.source].center)) return false;
-                        if (is_bad_cell(pawns[pair.target].center)) return false;
+                        // Цепочка до 7: 1+1, 2+2, …, 6+6. Седьмой дальше
+                        // не растёт. Детектор различает 1 / 2 / 3+, поэтому
+                        // щит+щит тоже пробуем — это ранги 3…6.
+                        if (pair.rank_source >= rr::kMergeRankMax) return false;
+                        if (pair.rank_target >= rr::kMergeRankMax) return false;
                         return !is_failed_pair(cell_of_pawn(pawns[pair.source].center),
                                                cell_of_pawn(pawns[pair.target].center));
                     };
@@ -1220,13 +1238,26 @@ int main(int argc, char** argv) {
                                           bool adjacent_only) {
                         const rr::MergePair* best = nullptr;
                         double best_estimate = -1.0;
+                        double best_distance = 1e9;
                         for (const rr::MergePair& pair : pairs) {
                             if (!good(pair, max_size_diff)) continue;
-                            if (adjacent_only && !pair.adjacent) continue;
+                            if (adjacent_only && !pair_adjacent(pair)) continue;
                             const double estimate = rr::merge_success_estimate(pair);
                             if (estimate < min_estimate) continue;
-                            if (estimate <= best_estimate) continue;
+                            // При почти равной оценке сначала более высокий
+                            // ранг (растим цепочку до 7), потом ближайших.
+                            if (best != nullptr) {
+                                if (estimate + 0.02 < best_estimate) continue;
+                                if (estimate <= best_estimate + 0.02) {
+                                    if (pair.rank_source < best->rank_source) continue;
+                                    if (pair.rank_source == best->rank_source &&
+                                        pair.distance >= best_distance) {
+                                        continue;
+                                    }
+                                }
+                            }
                             best_estimate = estimate;
+                            best_distance = pair.distance;
                             best = &pair;
                         }
                         return best;
@@ -1254,12 +1285,6 @@ int main(int argc, char** argv) {
                     }
                     if (best == nullptr && board_tight) {
                         best = pick(0.30, rr::kMergeSizeRelaxed, true);
-                    }
-                    if (best == nullptr && board_tight) {
-                        // Совсем ничего нет — ослабляем сходство портретов
-                        // (тип карты может отличаться), но ранг оставляем:
-                        // разные ранги игра не сливает.
-                        best = pick(0.10, rr::kMergeSizeRelaxed, false);
                     }
                     // Если соседних пар нет (или все не вышли) — пробуем через
                     // всю доску, но только с очень похожими портретами.
@@ -1311,11 +1336,44 @@ int main(int argc, char** argv) {
                 // Звать юнита имеет смысл, только если есть свободная клетка:
                 // на забитой доске призыв всё равно не создаст юнита (виджет
                 // гаснет), а место надо освободить слиянием.
+                //
+                // Кроме того, бот не забивает доску подчистую (keep_room):
+                // лишние юниты разных типов слить нельзя, и место для
+                // нормальных юнитов не остаётся. Запас мест нужен, чтобы
+                // было куда звать и что сливать.
                 const bool has_room = !board.valid || board.free_cells > 0;
-                if (!merged && affordable && !no_summon && has_room) {
-                    const cv::Point button = hud.summon_button(canvas);
-                    show_click(canvas, button, "призыв", g_click_index++);
-                    click_canvas(button);
+                const bool keep_room = keep_room_cells <= 0 || !board.valid ||
+                                       board.free_cells > keep_room_cells ||
+                                       our_pawns < 4;
+                if (!merged && affordable && !no_summon && has_room && keep_room) {
+                    bool placed = false;
+                    if (from_deck && board.valid) {
+                        const std::string lane = have_plan ? plan_action.lane : "";
+                        const cv::Point cell = rr::pick_free_cell(board, lane);
+                        int slot = 0;
+                        for (int i = 1; i <= 5; ++i) {
+                            if (hud.deck_slot_ready(canvas, i)) {
+                                slot = i;
+                                break;
+                            }
+                        }
+                        if (slot > 0 && cell.x >= 0) {
+                            const cv::Rect card = hud.deck_card_rect(slot);
+                            const cv::Point from(card.x + card.width / 2, card.y + card.height / 2);
+                            show_click(canvas, from, "колода", g_click_index++);
+                            drag_merge(game, pawns, from, cell);
+                            std::cout << "    высаживаю карточку " << slot << " в клетку ("
+                                      << cell.x << "," << cell.y << ")";
+                            if (!lane.empty()) std::cout << " линия " << lane;
+                            std::cout << std::endl;
+                            placed = true;
+                        }
+                    }
+                    if (!placed) {
+                        const cv::Point button = hud.summon_button(canvas);
+                        show_click(canvas, button, "призыв", g_click_index++);
+                        click_canvas(button);
+                    }
                 }
                 last_summon = now;
                 if (debug) {

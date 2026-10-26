@@ -15,6 +15,7 @@
 
 #include <opencv2/core.hpp>
 
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -61,6 +62,16 @@ struct CellGrid {
     cv::Point point_of(std::pair<int, int> cell) const;
 };
 
+// Клетка высадки на своей стороне: столбец 0..4 слева направо, ряд 0..2
+// сверху вниз (ряд 2 — у своей базы).
+struct DeployCell {
+    int column = 0;
+    int row = 0;
+    cv::Point center;
+    bool occupied = false;
+    double busy = 0.0;
+};
+
 // Состояние доски: сколько клеток высадки занято.
 struct BoardState {
     // Удалось ли оценить доску.
@@ -77,6 +88,8 @@ struct BoardState {
     CellGrid grid;
     // «Пестрота» каждой клетки (разброс яркости в пятне клетки).
     std::vector<double> cell_busy;
+    // Все 15 клеток высадки (порядок: ряды сверху вниз, в ряду слева направо).
+    std::vector<DeployCell> cells;
 };
 
 // Оценить сетку клеток по пешкам.
@@ -100,5 +113,11 @@ CellGrid estimate_grid(const std::vector<Pawn>& pawns);
 BoardState analyze_board(const cv::Mat& canvas,
                          const ArenaFrame& arena,
                          const std::vector<Pawn>& pawns);
+
+// Свободная клетка для высадки. lane: "left", "right" или пусто — любая.
+//
+// Предпочитаем нижний ряд (у своей базы): юнит не ставится на передний
+// край, где его сразу бьют. Пустая точка (-1,-1) — свободных клеток нет.
+cv::Point pick_free_cell(const BoardState& board, const std::string& lane = {});
 
 }  // namespace rr

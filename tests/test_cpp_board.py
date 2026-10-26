@@ -106,3 +106,12 @@ def test_вместимость_доски_15():
     assert "kDeployCols = 5" in header
     assert "kDeployRows = 3" in header
     assert "kDeployCapacity = kDeployCols * kDeployRows" in header
+
+
+def test_выбор_свободной_клетки():
+    """Для высадки с колоды нужна свободная клетка по линии."""
+    board = (ROOT / "cpp" / "src" / "board.cpp").read_text()
+    header = (ROOT / "cpp" / "src" / "board.hpp").read_text()
+    assert "cv::Point pick_free_cell" in header
+    assert 'lane == "left"' in board
+    assert 'lane == "right"' in board

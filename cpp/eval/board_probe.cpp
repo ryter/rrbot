@@ -43,7 +43,8 @@ int main(int argc, char** argv) {
                   << board.grid.phase_x << "," << board.grid.phase_y << "), подтвердили "
                   << board.grid.inliers << " из " << board.grid.considered;
         std::cout << ", занято " << board.occupied << "/" << board.capacity
-                  << ", свободно " << board.free_cells << std::endl;
+                  << ", свободно " << board.free_cells
+                  << ", клеток " << board.cells.size() << std::endl;
         if (!board.cell_busy.empty()) {
             std::cout << "   пестрота клеток:";
             for (const double busy : board.cell_busy) {

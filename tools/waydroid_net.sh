@@ -74,5 +74,17 @@ fi
 
 sleep 2
 adb devices
+
+# Unity ходит через системный HTTP-прокси Android. Если он указывает на
+# 127.0.0.1, а внутри гостя прокси нет — игра не коннектится
+# («Cannot connect to destination host»), хотя ping и curl работают.
+PROXY=$(adb shell settings get global http_proxy 2>/dev/null | tr -d '\r')
+if [ -n "$PROXY" ] && [ "$PROXY" != "null" ] && [ "$PROXY" != ":0" ]; then
+    echo "==> сбрасываю HTTP-прокси Android ($PROXY)"
+    adb shell settings put global http_proxy :0 >/dev/null
+    adb shell settings delete global global_http_proxy_host >/dev/null
+    adb shell settings delete global global_http_proxy_port >/dev/null
+fi
+
 echo "==> проверка связи из контейнера"
 adb shell ping -c 1 -W 3 my.games 2>&1 | tail -2

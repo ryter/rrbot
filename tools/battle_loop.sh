@@ -22,6 +22,13 @@ alive() {
     [ -s "$LOG/alive.png" ]
 }
 
+# Перевод ARM-библиотек: после перезапуска одной сессии оверлей
+# libndk_translation.so иногда не монтируется, и игра падает
+# («libmain.so is for EM_AARCH64 instead of EM_X86_64»).
+ndk_ok() {
+    adb shell ls /system/lib64/libndk_translation.so >/dev/null 2>&1
+}
+
 # Перезапуск сессии Waydroid + восстановление сети.
 #
 # Перезапуск одной сессии НЕ всегда помогает: если сломался графический
@@ -46,14 +53,22 @@ restart_emulator() {
     sleep 6
     echo "$PASS" | sudo -S bash "$ROOT/tools/waydroid_net.sh" "$PASS" >/dev/null 2>&1
     sleep 3
-    waydroid app launch com.my.defense >/dev/null 2>&1
+    # Запуск игры через adb: `waydroid app launch` иногда падает с
+    # «Sending reply failed», и игра не поднимается.
+    adb shell am start -n com.my.defense/games.my.heart.commonpreloaderlib.PreloadActivity \
+        >/dev/null 2>&1
     sleep 10
-    if alive; then
+    if alive && ndk_ok; then
         echo "==> сессия помогла"
         return 0
     fi
-    # Сессия не помогла — сломан графический буфер, перезапускаем контейнер.
-    echo "==> сессия не помогла: перезапускаю контейнер (графический буфер)"
+    if alive && ! ndk_ok; then
+        echo "==> сессия поднялась без libndk_translation — нужен контейнер"
+    else
+        echo "==> сессия не помогла: перезапускаю контейнер (графический буфер)"
+    fi
+    # Сессия не помогла — сломан графический буфер или не смонтировался
+    # оверлей ARM-перевода; перезапускаем контейнер.
     echo "$PASS" | sudo -S waydroid session stop >/dev/null 2>&1
     sleep 3
     echo "$PASS" | sudo -S systemctl restart waydroid-container >/dev/null 2>&1
@@ -67,7 +82,10 @@ restart_emulator() {
     sleep 6
     echo "$PASS" | sudo -S bash "$ROOT/tools/waydroid_net.sh" "$PASS" >/dev/null 2>&1
     sleep 3
-    waydroid app launch com.my.defense >/dev/null 2>&1
+    # Запуск игры через adb: `waydroid app launch` иногда падает с
+    # «Sending reply failed», и игра не поднимается.
+    adb shell am start -n com.my.defense/games.my.heart.commonpreloaderlib.PreloadActivity \
+        >/dev/null 2>&1
     sleep 10
     alive
 }
@@ -88,8 +106,9 @@ while true; do
     # Режим боя: PvP (по умолчанию) или Co-Op (BATTLE_MODE=coop).
     MODE_ARGS="--pvp"
     [ "${BATTLE_MODE:-pvp}" = "coop" ] && MODE_ARGS=""
+    # Дополнительные аргументы бота (например, --keep-room 4) — из RRBOT_ARGS.
     timeout 600 ./build/rrbot --backend emulator $MODE_ARGS --steps 60 --rounds 6 \
-        --record "$LOG/battle_loop" >> "$LOG/battle_loop.log" 2>&1
+        ${RRBOT_ARGS:-} --record "$LOG/battle_loop" >> "$LOG/battle_loop.log" 2>&1
     echo "=== пауза 5 с ==="
     sleep 5
 done

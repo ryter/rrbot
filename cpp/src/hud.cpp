@@ -562,6 +562,24 @@ cv::Rect Hud::deck_card_rect(int position) const {
     return cv::Rect(x, row.y, width, row.height);
 }
 
+double Hud::deck_slot_saturation(const cv::Mat& canvas, int position) const {
+    const cv::Rect slot = deck_card_rect(position);
+    const cv::Rect inner(slot.x + slot.width / 6, slot.y + slot.height / 6,
+                         slot.width * 2 / 3, slot.height * 2 / 3);
+    const cv::Rect bounded = inner & cv::Rect(0, 0, canvas.cols, canvas.rows);
+    if (bounded.area() <= 0) return 0.0;
+    cv::Mat hsv;
+    cv::cvtColor(canvas(bounded), hsv, cv::COLOR_BGR2HSV);
+    std::vector<cv::Mat> channels;
+    cv::split(hsv, channels);
+    return cv::mean(channels[1])[0];
+}
+
+bool Hud::deck_slot_ready(const cv::Mat& canvas, int position) const {
+    // Порог с живого замера: цветная карточка ~80..140, серая (откат) < 20.
+    return deck_slot_saturation(canvas, position) >= 58.0;
+}
+
 bool Hud::in_battle(const cv::Mat& canvas) const {
     return in_battle(canvas, layout_);
 }

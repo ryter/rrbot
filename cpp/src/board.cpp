@@ -234,13 +234,26 @@ BoardState analyze_board(const cv::Mat& canvas,
     const double patch_radius = grid.spacing * 0.38;
     std::vector<std::pair<int, int>> occupied;
     std::vector<double> busy_values;
+    std::vector<DeployCell> cells;
+    int local_row = 0;
     for (const int row : rows) {
+        int local_col = 0;
         for (const int column : columns) {
             const cv::Point2d point = grid_point(grid, column, row);
             const double busy = cell_busy(gray, point, patch_radius);
             busy_values.push_back(busy);
-            if (busy > kCellBusyThreshold) occupied.emplace_back(column, row);
+            DeployCell cell;
+            cell.column = local_col;
+            cell.row = local_row;
+            cell.center = cv::Point(static_cast<int>(std::lround(point.x)),
+                                    static_cast<int>(std::lround(point.y)));
+            cell.busy = busy;
+            cell.occupied = busy > kCellBusyThreshold;
+            cells.push_back(cell);
+            if (cell.occupied) occupied.emplace_back(column, row);
+            ++local_col;
         }
+        ++local_row;
     }
     // Проверка: пешки стоят на занятых клетках. Если нет — решётка посчитана
     // не по той фазе, и оценке доски верить нельзя.
@@ -262,7 +275,32 @@ BoardState analyze_board(const cv::Mat& canvas,
     state.free_cells = std::max(0, state.capacity - state.occupied);
     state.occupied_cells = occupied;
     state.cell_busy = busy_values;
+    state.cells = cells;
     return state;
+}
+
+cv::Point pick_free_cell(const BoardState& board, const std::string& lane) {
+    cv::Point best(-1, -1);
+    int best_score = -1000;
+    for (const DeployCell& cell : board.cells) {
+        if (cell.occupied) continue;
+        // Нижний ряд ближе к своей базе — безопаснее переднего края.
+        int score = cell.row;
+        if (lane == "left") {
+            if (cell.column <= 1) score += 10;
+            else if (cell.column == 2) score += 3;
+            else score -= 5;
+        } else if (lane == "right") {
+            if (cell.column >= 3) score += 10;
+            else if (cell.column == 2) score += 3;
+            else score -= 5;
+        }
+        if (score > best_score) {
+            best_score = score;
+            best = cell.center;
+        }
+    }
+    return best;
 }
 
 }  // namespace rr
