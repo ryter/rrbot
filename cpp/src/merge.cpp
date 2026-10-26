@@ -377,4 +377,67 @@ int find_pawn_near(const cv::Mat& canvas, const std::vector<Pawn>& pawns,
     return best;
 }
 
+void RankTracker::clear() {
+    items.clear();
+    pending_at = {-1, -1};
+    pending_rank = 0;
+}
+
+void RankTracker::promote(cv::Point target, int new_rank) {
+    pending_at = target;
+    pending_rank = std::clamp(new_rank, 1, kMergeRankMax);
+}
+
+std::vector<int> RankTracker::update(const std::vector<Pawn>& pawns) {
+    std::vector<int> ranks(pawns.size(), 1);
+    std::vector<char> taken(items.size(), 0);
+    struct Cand {
+        int pawn = -1;
+        int item = -1;
+        double dist = 0;
+    };
+    std::vector<Cand> cands;
+    for (int i = 0; i < static_cast<int>(pawns.size()); ++i) {
+        if (!pawns[i].ours) continue;
+        for (int j = 0; j < static_cast<int>(items.size()); ++j) {
+            const double dist = std::hypot(pawns[i].center.x - items[j].center.x,
+                                           pawns[i].center.y - items[j].center.y);
+            if (dist > 100.0) continue;
+            cands.push_back({i, j, dist});
+        }
+    }
+    std::sort(cands.begin(), cands.end(),
+              [](const Cand& a, const Cand& b) { return a.dist < b.dist; });
+    std::vector<char> pawn_taken(pawns.size(), 0);
+    for (const Cand& cand : cands) {
+        if (pawn_taken[cand.pawn] || taken[cand.item]) continue;
+        pawn_taken[cand.pawn] = 1;
+        taken[cand.item] = 1;
+        ranks[cand.pawn] = items[cand.item].rank;
+    }
+    if (pending_rank > 0) {
+        int best = -1;
+        double best_dist = 90.0;
+        for (int i = 0; i < static_cast<int>(pawns.size()); ++i) {
+            if (!pawns[i].ours) continue;
+            const double dist =
+                std::hypot(pawns[i].center.x - pending_at.x, pawns[i].center.y - pending_at.y);
+            if (dist < best_dist) {
+                best_dist = dist;
+                best = i;
+            }
+        }
+        if (best >= 0) ranks[best] = pending_rank;
+        pending_rank = 0;
+        pending_at = {-1, -1};
+    }
+    std::vector<Item> next;
+    for (int i = 0; i < static_cast<int>(pawns.size()); ++i) {
+        if (!pawns[i].ours) continue;
+        next.push_back({pawns[i].center, ranks[i], pawns[i].radius});
+    }
+    items = std::move(next);
+    return ranks;
+}
+
 }  // namespace rr

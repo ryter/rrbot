@@ -103,12 +103,14 @@ while true; do
         adb shell wm size 941x1030
         sleep 2
     fi
-    # Режим боя: PvP (по умолчанию) или Co-Op (BATTLE_MODE=coop).
-    MODE_ARGS="--pvp"
-    [ "${BATTLE_MODE:-pvp}" = "coop" ] && MODE_ARGS=""
-    # Дополнительные аргументы бота (например, --keep-room 4) — из RRBOT_ARGS.
+    # Режим боя: Co-Op (по умолчанию) или PvP (BATTLE_MODE=pvp).
+    # В кооп путь короткий: меню → Co-Op → «Играть» (обычный или золотой
+    # билет) → «Случайный» → модификатор. Карточки колоды высаживаем сами.
+    MODE_ARGS=""
+    [ "${BATTLE_MODE:-coop}" = "pvp" ] && MODE_ARGS="--pvp"
+    # Призыв + слияние. Колоду и умение героя не трогаем.
     timeout 600 ./build/rrbot --backend emulator $MODE_ARGS --steps 60 --rounds 6 \
-        ${RRBOT_ARGS:-} --record "$LOG/battle_loop" >> "$LOG/battle_loop.log" 2>&1
+        --no-ability ${RRBOT_ARGS:-} --record "$LOG/battle_loop" >> "$LOG/battle_loop.log" 2>&1
     echo "=== пауза 5 с ==="
     sleep 5
 done

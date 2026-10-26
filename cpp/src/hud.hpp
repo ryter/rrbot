@@ -126,11 +126,13 @@ public:
     // out кнопку, которую надо нажать.
     enum class CoopScreen {
         kNone,       // Это не экран коопа.
-        kFloors,    // Список этажей: жмём «Играть» на первом этаже.
-        kAlly,      // Выбор союзника: жмём «Случайный».
+        kFloors,    // Список этажей: «Играть» обычным или золотым билетом.
+        kAlly,      // Выбор союзника: карта сокровищ внизу, иначе «Случайный».
         kModifier,  // Выбор модификатора: жмём первую карточку.
     };
-    CoopScreen coop_screen(const cv::Mat& canvas, cv::Rect* out) const;
+    // gold_play: золотая «Играть» на этажах или золотая карта на союзнике.
+    CoopScreen coop_screen(const cv::Mat& canvas, cv::Rect* out,
+                           bool* gold_play = nullptr) const;
 
     const DigitReader& digits() const { return digits_; }
     // Заменить каталог эталонов цифр: нужно, чтобы сравнить наборы.

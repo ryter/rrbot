@@ -46,14 +46,16 @@ ARENA_BIN := build/arena_probe
 # Линкуется со всеми объектами бота, кроме main.o (своей точки входа у неё нет).
 DECK_OBJ := build/eval_deck_probe.o $(filter-out build/main.o,$(OBJ))
 DECK_BIN := build/deck_probe
+TRACK_OBJ := build/eval_rank_track.o build/merge.o build/arena.o
+TRACK_BIN := build/rank_track
 
 # Зависимости от заголовков подключаются для всех объектов, включая
 # проверочные программы: без этого они собираются под старые заголовки и
 # падают (уже было: бинарь планировщика печатал пустые оценки).
-ALL_OBJ := $(OBJ) $(EVAL_OBJ) $(PLAN_OBJ) $(MERGE_OBJ) $(ARENA_OBJ) $(ESTIMATE_OBJ) $(BOARD_OBJ) build/eval_deck_probe.o
+ALL_OBJ := $(OBJ) $(EVAL_OBJ) $(PLAN_OBJ) $(MERGE_OBJ) $(ARENA_OBJ) $(ESTIMATE_OBJ) $(BOARD_OBJ) build/eval_deck_probe.o build/eval_rank_track.o
 DEP := $(ALL_OBJ:.o=.d)
 
-all: $(BIN) $(EVAL_BIN) $(PLAN_BIN) $(MERGE_BIN) $(ARENA_BIN) $(ESTIMATE_BIN) $(BOARD_BIN) $(DECK_BIN)
+all: $(BIN) $(EVAL_BIN) $(PLAN_BIN) $(MERGE_BIN) $(ARENA_BIN) $(ESTIMATE_BIN) $(BOARD_BIN) $(DECK_BIN) $(TRACK_BIN)
 
 build/%.o: src/%.cpp | build
 	$(CXX) $(CXXFLAGS) $(DEPFLAGS) $(PKG_CFLAGS) -Isrc -c $< -o $@
@@ -86,6 +88,9 @@ $(BOARD_BIN): $(BOARD_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDLIBS)
 
 $(DECK_BIN): $(DECK_OBJ)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDLIBS)
+
+$(TRACK_BIN): $(TRACK_OBJ)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDLIBS)
 
 clean:

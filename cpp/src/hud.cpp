@@ -90,6 +90,151 @@ cv::Mat crop(const cv::Mat& image, cv::Rect rect) {
     return image(rect).clone();
 }
 
+// Трофейная дорога («Место в рейтинге»): снизу широкая синяя полоса на
+// всю ширину. Стрелка «назад» и кнопка рейтинга сливаются в одну
+// компоненту, поэтому find_buttons их не видит (слишком широко).
+bool trophy_road(const cv::Mat& work, UiElement* back_out) {
+    if (work.empty()) return false;
+    const int width = work.cols;
+    const int height = work.rows;
+    const int top = static_cast<int>(height * 0.82);
+    if (top >= height - 4) return false;
+    cv::Mat hsv;
+    cv::cvtColor(work(cv::Rect(0, top, width, height - top)), hsv, cv::COLOR_BGR2HSV);
+    cv::Mat mask;
+    cv::inRange(hsv, cv::Scalar(95, 80, 80), cv::Scalar(135, 255, 255), mask);
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat cents;
+    const int n = cv::connectedComponentsWithStats(mask, labels, stats, cents, 8);
+    int best = -1;
+    int best_area = 0;
+    for (int i = 1; i < n; ++i) {
+        const int w = stats.at<int>(i, cv::CC_STAT_WIDTH);
+        const int h = stats.at<int>(i, cv::CC_STAT_HEIGHT);
+        const int area = stats.at<int>(i, cv::CC_STAT_AREA);
+        if (w < width * 0.55) continue;
+        if (h < height * 0.05 || h > height * 0.22) continue;
+        if (area > best_area) {
+            best_area = area;
+            best = i;
+        }
+    }
+    if (best < 0) return false;
+    // Экран итогов тоже с синей полосой внизу, но там по центру
+    // «Продолжить» — не трофейная дорога, «назад» там ничего не делает.
+    {
+        cv::Mat bar_hsv = hsv;
+        cv::Mat blue;
+        cv::inRange(bar_hsv, cv::Scalar(95, 80, 80), cv::Scalar(135, 255, 255), blue);
+        cv::Mat labels2;
+        cv::Mat stats2;
+        cv::Mat cents2;
+        const int n2 = cv::connectedComponentsWithStats(blue, labels2, stats2, cents2, 8);
+        for (int i = 1; i < n2; ++i) {
+            const int w = stats2.at<int>(i, cv::CC_STAT_WIDTH);
+            const int h = stats2.at<int>(i, cv::CC_STAT_HEIGHT);
+            const int cx = stats2.at<int>(i, cv::CC_STAT_LEFT) + w / 2;
+            if (w < width * 0.12 || w > width * 0.28) continue;
+            if (h < height * 0.03 || h > height * 0.10) continue;
+            if (std::abs(cx - width / 2) > width * 0.12) continue;
+            // «Продолжить» на итогах — не рейтинг на трофейной дороге.
+            return false;
+        }
+    }
+    if (back_out != nullptr) {
+        const int x = stats.at<int>(best, cv::CC_STAT_LEFT);
+        const int y = stats.at<int>(best, cv::CC_STAT_TOP) + top;
+        const int bh = stats.at<int>(best, cv::CC_STAT_HEIGHT);
+        const int side = std::max(24, std::min(bh - 8, width / 12));
+        *back_out = {"back", x + 8, y + std::max(0, (bh - side) / 2), side, side};
+    }
+    return true;
+}
+
+// Карты сокровищ внизу экрана выбора союзника: две кнопки (~140×70).
+// Выбранная подсвечивается жёлтым. Берём любую доступную (сначала
+// невыбранную синюю — чтобы не щёлкать уже выбранную по кругу).
+bool treasure_map(const cv::Mat& work, const std::vector<UiElement>& buttons,
+                  cv::Rect* out, bool* gold) {
+    if (work.empty() || out == nullptr) return false;
+    const int width = work.cols;
+    const int height = work.rows;
+    std::vector<UiElement> maps;
+    for (const UiElement& b : buttons) {
+        if (b.kind != "continue" && b.kind != "fight" && b.kind != "orange") continue;
+        if (b.y < height * 0.88) continue;
+        if (b.x < width * 0.25 || b.x + b.w > width * 0.75) continue;
+        if (b.w < width * 0.10 || b.w > width * 0.22) continue;
+        if (b.h < height * 0.04 || b.h > height * 0.10) continue;
+        maps.push_back(b);
+    }
+    if (maps.empty()) return false;
+    std::sort(maps.begin(), maps.end(),
+              [](const UiElement& a, const UiElement& b) { return a.x < b.x; });
+
+    auto yellow_fill = [&](const UiElement& btn) {
+        const cv::Rect clipped =
+            cv::Rect(btn.x, btn.y, btn.w, btn.h) & cv::Rect(0, 0, width, height);
+        if (clipped.width <= 0 || clipped.height <= 0) return 0.0;
+        cv::Mat hsv;
+        cv::cvtColor(work(clipped), hsv, cv::COLOR_BGR2HSV);
+        cv::Mat mask;
+        cv::inRange(hsv, cv::Scalar(14, 100, 120), cv::Scalar(40, 255, 255), mask);
+        return cv::countNonZero(mask) * 1.0 / mask.total();
+    };
+    auto green_icon = [&](const UiElement& btn) {
+        const cv::Rect clipped =
+            cv::Rect(btn.x, btn.y, btn.w, btn.h) & cv::Rect(0, 0, width, height);
+        if (clipped.width <= 0 || clipped.height <= 0) return 0;
+        cv::Mat hsv;
+        cv::cvtColor(work(clipped), hsv, cv::COLOR_BGR2HSV);
+        cv::Mat mask;
+        cv::inRange(hsv, cv::Scalar(35, 70, 70), cv::Scalar(95, 255, 255), mask);
+        return cv::countNonZero(mask);
+    };
+
+    // Уже выбранная (жёлтая) — не трогаем, берём другую или эту, если одна.
+    const UiElement* pick = nullptr;
+    double pick_yellow = 2.0;
+    for (const UiElement& b : maps) {
+        const double y = yellow_fill(b);
+        if (y < pick_yellow) {
+            pick_yellow = y;
+            pick = &b;
+        }
+    }
+    if (pick == nullptr) pick = &maps.front();
+    *out = cv::Rect(pick->x, pick->y, pick->w, pick->h);
+    // Золотая обычно справа; зелёная иконка — обычная карта.
+    if (gold != nullptr) {
+        *gold = green_icon(*pick) < 150 && pick->x > width * 0.45;
+    }
+    return true;
+}
+
+// Карта уже выбрана: одна из нижних кнопок жёлтая, текст не «без карты».
+bool treasure_map_selected(const cv::Mat& work, const std::vector<UiElement>& buttons) {
+    if (work.empty()) return false;
+    const int width = work.cols;
+    const int height = work.rows;
+    for (const UiElement& b : buttons) {
+        if (b.kind != "continue" && b.kind != "fight" && b.kind != "orange") continue;
+        if (b.y < height * 0.88) continue;
+        if (b.x < width * 0.25 || b.x + b.w > width * 0.75) continue;
+        if (b.w < width * 0.10 || b.w > width * 0.22) continue;
+        const cv::Rect clipped =
+            cv::Rect(b.x, b.y, b.w, b.h) & cv::Rect(0, 0, width, height);
+        if (clipped.width <= 0) continue;
+        cv::Mat hsv;
+        cv::cvtColor(work(clipped), hsv, cv::COLOR_BGR2HSV);
+        cv::Mat mask;
+        cv::inRange(hsv, cv::Scalar(14, 100, 120), cv::Scalar(40, 255, 255), mask);
+        if (cv::countNonZero(mask) * 1.0 / mask.total() > 0.25) return true;
+    }
+    return false;
+}
+
 }  // namespace
 
 // Правила поиска кнопок живут в layout.cpp: раньше они были описаны ещё и
@@ -764,8 +909,10 @@ bool Hud::find_text(const cv::Mat& canvas, const std::string& name, cv::Rect* ou
     return true;
 }
 
-Hud::CoopScreen Hud::coop_screen(const cv::Mat& canvas, cv::Rect* out) const {
+Hud::CoopScreen Hud::coop_screen(const cv::Mat& canvas, cv::Rect* out,
+                                 bool* gold_play) const {
     if (canvas.empty() || out == nullptr) return CoopScreen::kNone;
+    if (gold_play != nullptr) *gold_play = false;
     const Layout layout = canonical_layout();
     cv::Mat work;
     if (canvas.size() == layout.canvas_size) {
@@ -894,21 +1041,84 @@ Hud::CoopScreen Hud::coop_screen(const cv::Mat& canvas, cv::Rect* out) const {
         }
     }
 
-    // Выбор союзника: «Случайный» — единственная надпись, которая тут есть.
+    if (trophy_road(work, nullptr)) {
+        return CoopScreen::kNone;
+    }
+    const Layout canon = canonical_layout();
+    const std::vector<UiElement> buttons = find_buttons(work, canon);
+
+    // Выбор союзника: сначала любая карта сокровищ внизу, потом «Случайный»
+    // (он стартует бой). Без выбора карты кооп идёт «без карты».
     cv::Rect random_text;
     if (find_text(work, "random", &random_text, 0.85)) {
+        if (treasure_map_selected(work, buttons)) {
+            *out = random_text;
+            return CoopScreen::kAlly;
+        }
+        cv::Rect map;
+        bool map_gold = false;
+        if (treasure_map(work, buttons, &map, &map_gold)) {
+            *out = map;
+            if (gold_play != nullptr) *gold_play = map_gold;
+            return CoopScreen::kAlly;
+        }
         *out = random_text;
         return CoopScreen::kAlly;
     }
 
-    // Список этажей: жмём «Играть» на первом (верхнем) этаже.
+    // Главное меню тоже полное золотых пятен (PvP, сундуки, акции) —
+    // без этой проверки бот «жмёт Играть золотым билетом» прямо в меню.
+    cv::Rect menu_text;
+    if (find_text(work, "pvp", &menu_text) || find_text(work, "coop", &menu_text)) {
+        return CoopScreen::kNone;
+    }
+
+    // Экран итогов: внизу «Продолжить». Шаблон «Играть» там ложно
+    // совпадает (~0.85), и бот кликал мимо кнопки выхода.
+    for (const UiElement& b : buttons) {
+        if (b.kind != "continue") continue;
+        if (b.y < work.rows * 0.88) continue;
+        if (std::abs(b.center().x - work.cols / 2) > work.cols * 0.14) continue;
+        if (b.w < work.cols * 0.12 || b.w > work.cols * 0.30) continue;
+        return CoopScreen::kNone;
+    }
+
+    // Список этажей: жмём «Играть». Два билета — обычный (синяя кнопка,
+    // шаблон совпадает на ~0.99) и золотой (кнопка жёлтая, шаблон ~0.29,
+    // поэтому ищем её цветом). Обычный берём первым: золото тратить не
+    // нужно, пока есть бесплатный вход. Если синей нет — золотая.
     //
-    // Надпись «Играть» есть и на золотых кнопках платных этажей, но шаблон
-    // снят с синей кнопки, поэтому на золотой он не совпадает (0.29 против
-    // 0.99 на своей).
+    // Надпись ищем справа: на этажах кнопка стоит в ряду справа, а ложные
+    // совпадения на трофейной дороге попадали в левый столбец кубков.
     cv::Rect play_text;
-    if (find_text(work, "play", &play_text, 0.85)) {
+    // «Играть» на этажах — в середине экрана справа. На лаунчере Android
+    // шаблон ложно совпадает внизу (~y 0.95) — отсекаем по полосе.
+    if (find_text(work, "play", &play_text, 0.85) && play_text.x > work.cols * 0.35 &&
+        play_text.y > work.rows * 0.20 && play_text.y < work.rows * 0.72) {
         *out = play_text;
+        return CoopScreen::kFloors;
+    }
+    std::vector<UiElement> gold_plays;
+    for (const UiElement& b : buttons) {
+        if (b.kind != "fight") continue;
+        if (b.y < work.rows * 0.28 || b.y > work.rows * 0.72) continue;
+        if (b.x < work.cols * 0.40) continue;
+        if (b.w < work.cols * 0.16 || b.w > work.cols * 0.45) continue;
+        if (b.h < work.rows * 0.03 || b.h > work.rows * 0.10) continue;
+        gold_plays.push_back(b);
+    }
+    if (!gold_plays.empty()) {
+        const UiElement& top = *std::min_element(
+            gold_plays.begin(), gold_plays.end(),
+            [](const UiElement& a, const UiElement& b) { return a.y < b.y; });
+        *out = cv::Rect(top.x, top.y, top.w, top.h);
+        if (gold_play != nullptr) *gold_play = true;
+        return CoopScreen::kFloors;
+    }
+    if (find_text(work, "play", &play_text, 0.28) && play_text.x > work.cols * 0.35 &&
+        play_text.y > work.rows * 0.20 && play_text.y < work.rows * 0.72) {
+        *out = play_text;
+        if (gold_play != nullptr) *gold_play = true;
         return CoopScreen::kFloors;
     }
 
@@ -993,6 +1203,23 @@ std::vector<UiElement> Hud::navigation_candidates_at(const cv::Mat& canvas,
         out.push_back({"tap", layout.canvas_size.width / 2 - 10,
                        layout.canvas_size.height / 2 - 10, 20, 20});
         return out;
+    }
+
+    UiElement trophy_back;
+    if (trophy_road(canvas, &trophy_back)) {
+        // Нижняя синяя полоса есть и в главном меню (вкладки). Там же
+        // стоят «PvP» и «Co-Op» — это не трофейная дорога, «назад» отсюда
+        // спрашивает «выйти из игры?».
+        cv::Rect menu_text;
+        const bool main_menu =
+            (find_text(canvas, "pvp", &menu_text) &&
+             menu_text.y >= layout.canvas_size.height * 0.55) ||
+            (find_text(canvas, "coop", &menu_text) &&
+             menu_text.y >= layout.canvas_size.height * 0.55);
+        if (!main_menu) {
+            out.push_back(trophy_back);
+            return out;
+        }
     }
 
     // Кнопку «PvP» ищем по надписи: она надёжнее цвета — рядом с ней

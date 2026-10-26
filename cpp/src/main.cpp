@@ -98,15 +98,21 @@ bool drag_merge(rr::Game& game, const std::vector<rr::Pawn>& pawns, cv::Point fr
         return kept;
     };
     std::vector<rr::Pawn> before = without_pair(pawns, from, to);
-    for (int round = 0; round < 3; ++round) {
+    const double drag_len = std::hypot(to.x - from.x, to.y - from.y);
+    // Дальний жест через поле: больше сегментов, иначе игра не считает
+    // перетаскивание, и цель успевает уехать за пределы окна поиска.
+    const int segments = std::clamp(static_cast<int>(drag_len / 28.0), 5, 18);
+    const int rounds = drag_len > 160.0 ? 4 : 3;
+    const double snap = std::max(45.0, 35.0 + drag_len * 0.08);
+    for (int round = 0; round < rounds; ++round) {
         // Ведём курсор к цели плавно: игра ждёт, пока палец «проведёт» по
         // карточке, иначе перетаскивание не засчитывается.
-        for (int s = 1; s <= 5; ++s) {
-            const double t = static_cast<double>(s) / 5.0;
+        for (int s = 1; s <= segments; ++s) {
+            const double t = static_cast<double>(s) / segments;
             game.drag_move_canvas(
                 cv::Point(static_cast<int>(std::lround(cursor.x + (target.x - cursor.x) * t)),
                           static_cast<int>(std::lround(cursor.y + (target.y - cursor.y) * t))));
-            sleep_ms(40);
+            sleep_ms(32);
         }
         cursor = target;
         // Свежий кадр: за это время камера могла увести цель.
@@ -122,7 +128,7 @@ bool drag_merge(rr::Game& game, const std::vector<rr::Pawn>& pawns, cv::Point fr
         // плюс сдвиг: так отпускаем точно в основание, даже если камера
         // уехала неравномерно.
         int nearest = -1;
-        double nearest_dist = 45.0;
+        double nearest_dist = snap;
         for (int i = 0; i < static_cast<int>(after_all.size()); ++i) {
             const rr::Pawn& pawn = after_all[i];
             if (!pawn.ours) continue;
@@ -524,9 +530,9 @@ int main(int argc, char** argv) {
     // Два пути: PvP и Co-Op. По умолчанию бот идёт в Co-Op: на этом сервере
     // соперник в PvP находится через раз, а в кооп бой начинается сразу.
     //
-    // Путь в Co-Op (Подземелья) состоит из четырёх экранов:
-    //   главное меню -> «Co-Op» -> «Играть» на первом этаже ->
-    //   «Случайный» (союзник) -> выбор модификатора -> бой.
+    // Путь в Co-Op (Подземелья) — четыре экрана, без захода в PvP:
+    //   меню → «Co-Op» → «Играть» (синяя = обычный билет, золотая =
+    //   золотой) → «Случайный» → модификатор → бой.
     // Каждый экран узнаётся по тому, что на нём есть: надпись «Играть»,
     // надпись «Случайный», серо-синие карточки модификаторов.
     //
@@ -619,7 +625,9 @@ int main(int argc, char** argv) {
         report_result(hud.battle_result(canvas));
         if (coop_mode) {
             cv::Rect coop_target;
-            const rr::Hud::CoopScreen coop_screen = hud.coop_screen(canvas, &coop_target);
+            bool gold_play = false;
+            const rr::Hud::CoopScreen coop_screen =
+                hud.coop_screen(canvas, &coop_target, &gold_play);
             const cv::Point coop_point(coop_target.x + coop_target.width / 2,
                                        coop_target.y + coop_target.height / 2);
             if (!record_dir.empty()) {
@@ -643,18 +651,34 @@ int main(int argc, char** argv) {
                 continue;
             }
             if (coop_screen == rr::Hud::CoopScreen::kAlly) {
-                std::cout << "[кооп " << step << "] выбираю союзника «Случайный»" << std::endl;
+                // 1) любая карта внизу (выбор); 2) «Случайный» (старт боя).
+                if (coop_target.y > canvas.rows * 0.85) {
+                    std::cout << "[кооп " << step << "] беру "
+                              << (gold_play ? "золотую" : "доступную")
+                              << " карту сокровищ" << std::endl;
+                } else {
+                    std::cout << "[кооп " << step
+                              << "] «Случайный» — старт с картой" << std::endl;
+                }
                 click_canvas(coop_point);
                 coop_flow = true;
-                sleep_ms(2500);
+                sleep_ms(2000);
                 continue;
             }
             if (coop_screen == rr::Hud::CoopScreen::kFloors) {
-                std::cout << "[кооп " << step << "] жму «Играть»" << std::endl;
-                click_canvas(coop_point);
-                coop_flow = true;
-                sleep_ms(2500);
-                continue;
+                // Золотую «Играть» жмём только уже внутри коопа: в меню и
+                // на трофейной дороге те же жёлтые пятна — это награды.
+                if (gold_play && !coop_flow) {
+                    // не этажи — идём обычной навигацией
+                } else {
+                    std::cout << "[кооп " << step << "] жму «Играть» ("
+                              << (gold_play ? "золотой билет" : "обычный билет") << ")"
+                              << std::endl;
+                    click_canvas(coop_point);
+                    coop_flow = true;
+                    sleep_ms(2500);
+                    continue;
+                }
             }
         }
 
@@ -764,7 +788,11 @@ int main(int argc, char** argv) {
             const cv::Mat before = canvas.clone();
             show_click(canvas, button.center(), button.kind, g_click_index++);
             click_canvas(button.center());
-            if (button.kind == "pvp" || button.kind == "coop") {
+            if (button.kind == "coop" && coop_mode) {
+                // В коопе «Co-Op» открывает подземелья, а не матчмейкинг.
+                // Ждать бой тут нельзя — иначе бот 30 с топчется в меню.
+                sleep_ms(2500);
+            } else if (button.kind == "pvp" || button.kind == "coop") {
                 // Ждём матч: подбор соперника идёт по сети и может занять
                 // полминуты. Пока идёт — экран анимируется, поэтому по
                 // кадру «изменилось» судить бесполезно: смотрим, начался
@@ -908,6 +936,8 @@ int main(int argc, char** argv) {
     // Помним по клеткам сетки: координаты на кадре устаревают (камера едет),
     // а клетки — нет.
     std::vector<std::pair<std::pair<int, int>, std::pair<int, int>>> failed_pairs;
+    rr::RankTracker rank_tracker;
+    int merge_rank = 1;
     // Пара, которую сливали последний раз: её результат проверяем на
     // следующем шаге.
     cv::Point merge_source;
@@ -995,6 +1025,7 @@ int main(int argc, char** argv) {
         // какие карты в колоде.
         const rr::ArenaFrame arena = rr::find_arena(canvas);
         const std::vector<rr::Pawn> pawns = rr::find_pawns(canvas, arena);
+        std::vector<int> ranks = rank_tracker.update(pawns);
         // Сетка клеток поля: по ней помним пары, которые игра отклонила.
         // Индексы клеток не зависят от
         // положения камеры, в отличие от координат относительно арены
@@ -1024,6 +1055,18 @@ int main(int argc, char** argv) {
         if (board.valid) {
             std::cout << ", занято клеток " << board.occupied << "/" << board.capacity
                       << " (свободно " << board.free_cells << ")";
+        }
+        {
+            int by_rank[8] = {};
+            for (int i = 0; i < static_cast<int>(pawns.size()); ++i) {
+                if (!pawns[i].ours) continue;
+                const int rank = std::clamp(ranks[i], 1, 7);
+                ++by_rank[rank];
+            }
+            std::cout << ", ранги";
+            for (int rank = 1; rank <= 7; ++rank) {
+                if (by_rank[rank] > 0) std::cout << " " << rank << "×" << by_rank[rank];
+            }
         }
         std::cout << std::endl;
         // Умение героя: круглая кнопка справа внизу. Жмём, когда откат
@@ -1099,6 +1142,9 @@ int main(int argc, char** argv) {
                           << std::endl;
                 merge_fail_streak = 0;
                 failed_pairs.clear();
+                rank_tracker.promote(merge_target_abs,
+                                     std::min(rr::kMergeRankMax, merge_rank + 1));
+                ranks = rank_tracker.update(pawns);
             } else {
                 std::cout << "    слияние не вышло: пешек " << our_pawns << ", похожих было "
                           << merge_same_before << ", стало " << same_now << std::endl;
@@ -1179,7 +1225,16 @@ int main(int argc, char** argv) {
                 // дают одного сильного. Ищем пару соседних одинаковых пешек
                 // на своей половине и тянем одну на другую.
                 if (!no_merge && merge_pause_steps <= 0) {
-                    const std::vector<rr::MergePair> pairs = rr::find_merge_pairs(canvas, pawns);
+                    std::vector<rr::MergePair> pairs = rr::find_merge_pairs(canvas, pawns);
+                    for (rr::MergePair& pair : pairs) {
+                        if (pair.source >= 0 && pair.source < static_cast<int>(ranks.size())) {
+                            pair.rank_source = ranks[pair.source];
+                        }
+                        if (pair.target >= 0 && pair.target < static_cast<int>(ranks.size())) {
+                            pair.rank_target = ranks[pair.target];
+                        }
+                        pair.same_rank = pair.rank_source == pair.rank_target;
+                    }
                     // Сначала соседние пешки: слияние через всю доску может
                     // не сработать (или это просто неудобно). Если соседних
                     // слияний не выходит — пробуем и через всю доску.
@@ -1196,16 +1251,33 @@ int main(int argc, char** argv) {
                     // у крупного юнита 3.3 радиуса накрывает две клетки, и
                     // бот тянет через клетку (в замере 26.10 такие жесты на
                     // 156 px давали 4 из 5 провалов).
-                    const auto pair_adjacent = [&](const rr::MergePair& pair) {
+                    //
+                    // 0 — дальше соседней, 1 — по стороне (ортогонально),
+                    // 2 — по диагонали. В живых боях 26.10 ортогональные
+                    // жесты выходили в 89 % (последние 40 шагов — 18/18),
+                    // диагональные — в 73 % (последние 40 — 11/20).
+                    const auto neighbor_kind = [&](const rr::MergePair& pair) {
                         if (grid.valid) {
                             const auto a = cell_of_pawn(pawns[pair.source].center);
                             const auto b = cell_of_pawn(pawns[pair.target].center);
-                            if (a.first < 0 || b.first < 0) return pair.adjacent;
-                            const int dc = std::abs(a.first - b.first);
-                            const int dr = std::abs(a.second - b.second);
-                            return dc <= 1 && dr <= 1 && (dc + dr) > 0;
+                            if (a.first >= 0 && b.first >= 0) {
+                                const int dc = std::abs(a.first - b.first);
+                                const int dr = std::abs(a.second - b.second);
+                                if (dc + dr == 1) return 1;
+                                if (dc == 1 && dr == 1) return 2;
+                                return 0;
+                            }
                         }
-                        return pair.adjacent;
+                        const double dx = std::abs(pawns[pair.source].center.x -
+                                                   pawns[pair.target].center.x);
+                        const double dy = std::abs(pawns[pair.source].center.y -
+                                                   pawns[pair.target].center.y);
+                        if ((dx < 40 && dy >= 50 && dy < 140) ||
+                            (dy < 40 && dx >= 50 && dx < 140)) {
+                            return 1;
+                        }
+                        if (dx >= 50 && dx < 140 && dy >= 50 && dy < 140) return 2;
+                        return 0;
                     };
                     const auto good = [&](const rr::MergePair& pair, double max_size_diff) {
                         // Слабые портреты в живом бою 26.10 не слились
@@ -1234,14 +1306,15 @@ int main(int argc, char** argv) {
                     // (это юнит второго ранга) сливается в 50 % случаев, а
                     // пара с похожестью 0.85 и одинаковым размером — почти
                     // всегда.
-                    const auto pick = [&](double min_estimate, double max_size_diff,
-                                          bool adjacent_only) {
+                    // kind: 1 — только ортогональные соседи, 2 — только
+                    // диагональ, 0 — любая дистанция.
+                    const auto pick = [&](double min_estimate, double max_size_diff, int kind) {
                         const rr::MergePair* best = nullptr;
                         double best_estimate = -1.0;
                         double best_distance = 1e9;
                         for (const rr::MergePair& pair : pairs) {
                             if (!good(pair, max_size_diff)) continue;
-                            if (adjacent_only && !pair_adjacent(pair)) continue;
+                            if (kind != 0 && neighbor_kind(pair) != kind) continue;
                             const double estimate = rr::merge_success_estimate(pair);
                             if (estimate < min_estimate) continue;
                             // При почти равной оценке сначала более высокий
@@ -1269,29 +1342,41 @@ int main(int argc, char** argv) {
                                                           : our_pawns >= 10;
                     // Надёжная пара: сливается почти всегда (замер 25.10:
                     // 34 из 34). Остальные пороги — по оценке успеха.
-                    auto best = pick(0.90, rr::kMergeSizeMax, true);
+                    auto best = pick(0.90, rr::kMergeSizeMax, 1);
                     // Терпимая пара: похожесть 0.85 при одинаковом размере
                     // либо очень похожие портреты при небольшой разнице
                     // размеров.
                     if (best == nullptr) {
-                        best = pick(0.65, rr::kMergeSizeMax, true);
+                        best = pick(0.65, rr::kMergeSizeMax, 1);
+                    }
+                    // Диагональ, если рядом по стороне никого нет.
+                    if (best == nullptr) {
+                        best = pick(0.90, rr::kMergeSizeMax, 2);
+                    }
+                    if (best == nullptr) {
+                        best = pick(0.65, rr::kMergeSizeMax, 2);
+                    }
+                    // Дальше соседней клетки: игра сливает с любой клетки
+                    // своей половины. Берём любую одинаковую пару на поле,
+                    // ближайшую при равной оценке.
+                    if (best == nullptr) {
+                        best = pick(0.90, rr::kMergeSizeMax, 0);
+                    }
+                    if (best == nullptr) {
+                        best = pick(0.65, rr::kMergeSizeMax, 0);
                     }
                     // Ниже 0.65 слияние удаётся в 12-58 % случаев, и такая
                     // попытка только засоряет чёрные списки. Поэтому рыхлые
                     // пороги — только когда доска забита: там сливать надо
                     // любой ценой, иначе новый юнит не встанет.
                     if (best == nullptr && board_tight) {
-                        best = pick(0.50, rr::kMergeSizeRelaxed, true);
+                        best = pick(0.50, rr::kMergeSizeRelaxed, 1);
                     }
                     if (best == nullptr && board_tight) {
-                        best = pick(0.30, rr::kMergeSizeRelaxed, true);
+                        best = pick(0.50, rr::kMergeSizeRelaxed, 0);
                     }
-                    // Если соседних пар нет (или все не вышли) — пробуем через
-                    // всю доску, но только с очень похожими портретами.
-                    if (best == nullptr && merge_fail_streak >= 2) {
-                        // Соседних пар не нашлось — пробуем через всю доску, но
-                        // только с очень похожими портретами.
-                        best = pick(0.90, rr::kMergeSizeRelaxed, false);
+                    if (best == nullptr && board_tight) {
+                        best = pick(0.30, rr::kMergeSizeRelaxed, 0);
                     }
                     if (best != nullptr) {
                         const rr::MergePair& pair = *best;
@@ -1316,8 +1401,12 @@ int main(int argc, char** argv) {
                                   << ", оценка успеха "
                                   << static_cast<int>(rr::merge_success_estimate(pair) * 100) << " %"
                                   << ", сдвиг (" << to.x - from.x << "," << to.y - from.y << ")"
+                                  << (neighbor_kind(pair) == 1   ? ", орто"
+                                      : neighbor_kind(pair) == 2 ? ", диаг"
+                                                                 : ", далеко")
                                   << std::endl;
                         merge_pending = true;
+                        merge_rank = pair.rank_source;
                         merge_source = from;
                         merge_target = to;
                         merge_reference = pawns[pair.target];
